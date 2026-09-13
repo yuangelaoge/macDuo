@@ -8,7 +8,7 @@ Rather than rendering inside a separate window, **the entire macOS display follo
 
 ## NOTE
 
-- **Opening MacBook**: on the lock screen this is not possible due to macOS restrictions (it would require disabling SIP, which is not recommended — any malicious app could then draw a login flow on your lock screen and steal your passwords). The opening animation is implemented for the unlocked desktop.
+- **Opening MacBook**: Works on lockscreen via private skyline APIs
 - **Normal MacBook Use**: when you are actively using your MacBook (lid open), the app does **nothing** — the overlay is completely hidden, with zero CPU/GPU overhead and full click-through.
 - **Closing MacBook**: as you tilt the screen closed, the display freezes the screen and seamlessly folds **from up to down** toward the bottom keyboard hinge into the dark void.
 - **Clamshell desktop mode**: with an external display attached and the built-in panel asleep, the effect is suppressed — there is no visible hinge motion to animate.
@@ -25,37 +25,7 @@ macTilt adapts to the lid hardware it finds:
 ---
 
 ## Features
-
-### Animation
-
-- **Physical Lid Angle Sensing**: real-time 60 Hz polling of Apple's internal lid angle sensor, with an alpha-beta lead predictor to mask sensor latency.
-- **Native Metal Fold**: 3D perspective projection with an up-to-down clamshell hinge bend, rendered at the panel's native refresh rate (120 Hz ProMotion or 60 Hz).
-- **True Gaussian Defocus**: a six-level binomial gaussian pyramid feeds a continuous matte blur of any width, with adaptive 12/20/32-tap sampling and a velocity-aware boost during fast closes. No discrete ghost copies, no frosted grain.
-- **Glass Treatment**: grazing-angle tint, a specular rim band, a hinge highlight line, and a dark void horizon falloff. The frozen image is never bent or lensed — only dimmed and darkened.
-- **Side Blackout**: the horizontal parallax spread that lets the left and right edges fall into the void as the panel tilts away. Adjustable from 0% (the frame keeps its full width) to 200% (a deeper falloff), where 100% matches the physical projection.
-- **Full-Screen Seamless Overlay**: spans the entire screen at `.screenSaver` level. Completely click-through, and invisible while the lid is open.
-
-### Settings
-
-- **Screen Recording Permission**: live status, one-click authorization, and troubleshooting with an app relaunch plus a copyable `tccutil reset` command.
-- **Battery and Performance**: reports whether capture is dormant or pre-arming. macTilt polls nothing at idle and pre-arms the capture only in the moment the lid starts to close.
-- **Tilt Trigger Thresholds** (angle-sensor Macs): set the angle where the fold begins and the angle where it reaches full black.
-- **Clamshell Opening Animation** (switch-only Macs): opening duration from 0.4 s to 2.5 s, with Snappy, Natural and Cinematic presets and a live preview.
-- **Display Source**: live screen capture (`ScreenCaptureKit`), the current desktop wallpaper, bundled artwork, or a custom image.
-- **Menu Bar**: show or hide the live angle readout, or hide the status icon entirely.
-- **Physics and Shaders**: follow responsiveness, blur intensity, specular reflection, and side blackout.
-- **Lock Screen and Sleep Wake**: raises the overlay priority so the animation survives wake transitions.
-- **Interactive Preview**: scrub the whole fold on screen without physically moving the lid.
-- **Software Updates**: current version, a manual check, download of the latest DMG, and an automatic background check on launch.
-
-### Menu Bar
-
-- Live angle readout (for example `126°`) next to the status icon.
-- **Settings** (Command-Comma) and **Check for Updates** (Command-U).
-- Opening-animation controls and speed presets on switch-only Macs.
-- **Quit macTilt** (Command-Q).
-
----
+- just install and see duh
 
 ## Requirements
 
