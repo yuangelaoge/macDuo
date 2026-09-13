@@ -13,6 +13,7 @@ struct Uniforms {
     float reflectionIntensity;
     float sampleCount;   // adaptive quality: 12 / 20 / 32 (float for Swift layout parity)
     float motionBoost;   // velocity-aware extra blur radius (0 = still, larger = fast close)
+    float sideVoid;      // 0 = frame keeps full width, 1 = physical default, >1 = deeper side blackout
 };
 
 struct VertexOut {
@@ -38,6 +39,32 @@ vertex VertexOut foldVertex(uint vid [[vertex_id]]) {
     return out;
 }
 
+// True gaussian downsample: binomial 3x3 (σ ≈ 1.2 source texels), rendered
+// once per texture upload into each mip level. Chained levels double σ, so
+// mip k holds a genuine blur of σ ≈ 1.2 · 2^k texels — not a box average.
+struct PyramidParams {
+    float2 srcTexel;
+    float srcLod;
+    float pad;
+};
+
+fragment float4 gaussianDownsampleFragment(VertexOut in [[stage_in]],
+                                           texture2d<float> tex [[texture(0)]],
+                                           sampler s [[sampler(0)]],
+                                           constant PyramidParams &p [[buffer(0)]]) {
+    float2 uv = in.uv;
+    float3 acc = tex.sample(s, uv, level(p.srcLod)).rgb * 4.0;
+    acc += tex.sample(s, uv + float2( p.srcTexel.x, 0.0), level(p.srcLod)).rgb * 2.0;
+    acc += tex.sample(s, uv + float2(-p.srcTexel.x, 0.0), level(p.srcLod)).rgb * 2.0;
+    acc += tex.sample(s, uv + float2(0.0,  p.srcTexel.y), level(p.srcLod)).rgb * 2.0;
+    acc += tex.sample(s, uv + float2(0.0, -p.srcTexel.y), level(p.srcLod)).rgb * 2.0;
+    acc += tex.sample(s, uv + float2( p.srcTexel.x,  p.srcTexel.y), level(p.srcLod)).rgb;
+    acc += tex.sample(s, uv + float2(-p.srcTexel.x,  p.srcTexel.y), level(p.srcLod)).rgb;
+    acc += tex.sample(s, uv + float2( p.srcTexel.x, -p.srcTexel.y), level(p.srcLod)).rgb;
+    acc += tex.sample(s, uv + float2(-p.srcTexel.x, -p.srcTexel.y), level(p.srcLod)).rgb;
+    return float4(acc / 16.0, 1.0);
+}
+
 inline float3 sampleSmoothMatteBlur(texture2d<float> tex,
                                     sampler s,
                                     float2 uv,
@@ -47,33 +74,33 @@ inline float3 sampleSmoothMatteBlur(texture2d<float> tex,
                                     float2 screenCoord,
                                     int maxSamples) {
     float2 tuv = (uv - 0.5) * cover + 0.5;
-    
+
     // When radius is near zero, return razor-sharp native Retina sample at level 0
     if (radius <= 0.15) {
         return tex.sample(s, tuv, level(0.0)).rgb;
     }
-    
-    // CRITICAL FIX FOR PIXELATION:
-    // Previously, `lod = log2(radius)` scaled unchecked into levels 4-6 (45x29 texels),
-    // causing massive pixel blocks and severe aliasing that worsened with tilt.
-    //
-    // By keeping the base LOD tightly bounded (capped at 1.85), texels are never larger
-    // than 3-4 physical screen pixels. Combined with a dense 32-sample Vogel Disc
-    // (Golden Angle spiral) and trilinear filtering, the blur is 100% continuous,
-    // velvety, and free of blocky pixelation at all tilt angles.
-    float baseLod = clamp(log2(max(1.0, radius * 0.18)), 0.0, 1.85);
-    
-    // Subtle sub-pixel micro-rotation per screen pixel eliminates ring banding
-    // and produces a natural, tactile frosted-glass matte dispersion.
-    float rot = (fract(sin(dot(screenCoord, float2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.35;
+
+    // REAL GAUSSIAN BLUR via the pyramid (see gaussianDownsampleFragment):
+    // each mip level is a true binomial blur with σ doubling per level, so
+    // trilinear sampling at a radius-mapped LOD yields a smooth continuous
+    // gaussian of ANY width. The old approach widened a sparse spatial tap
+    // disc with radius — which is DISPERSION, not blur: bright text appeared
+    // as multiple discrete ghost copies, plus frosted grain and white haze.
+    float lod = clamp(log2(max(1.0, radius * 0.25)), 0.0, 5.0);
+
+    // Tiny Vogel disc at the CURRENT mip's texel scale (±1.2 texels): dense,
+    // heavily overlapping taps that polish trilinear level steps and edges —
+    // the spread NEVER scales with radius, so dispersion cannot come back.
+    float2 mipTexel = uiPixel * 0.5 * exp2(lod);
+
+    // Minimal per-pixel micro-rotation to break residual ring banding.
+    float rot = (fract(sin(dot(screenCoord, float2(12.9898, 78.233))) * 43758.5453) - 0.5) * 0.12;
     float cosRot = cos(rot);
     float sinRot = sin(rot);
-    
+
     float3 accum = float3(0.0);
     float totalWeight = 0.0;
-    
-    // 32-sample Vogel Disc (Golden Angle Fermat Spiral), adaptive early-out.
-    // Close path only: still lid = 12 taps, mid-fold = 20, fast close = 32.
+
     constexpr int NUM_SAMPLES = 32;
     constexpr float GOLDEN_ANGLE = 2.39996323; // pi * (3.0 - sqrt(5.0))
     int activeSamples = clamp(maxSamples, 4, NUM_SAMPLES);
@@ -82,34 +109,22 @@ inline float3 sampleSmoothMatteBlur(texture2d<float> tex,
         if (i >= activeSamples) { break; }
         float fi = float(i);
         float theta = fi * GOLDEN_ANGLE;
-        // Square root progression provides uniform area density across the disc
         float r = sqrt((fi + 0.5) / float(activeSamples));
-        
-        // Direction rotated by micro-jitter
         float uX = cos(theta);
         float uY = sin(theta);
         float dirX = uX * cosRot - uY * sinRot;
         float dirY = uX * sinRot + uY * cosRot;
-        
-        float2 offset = float2(dirX, dirY) * (r * radius * uiPixel);
+
+        float2 offset = float2(dirX, dirY) * (r * 1.2 * mipTexel);
         float2 sampleUV = clamp(tuv + offset, 0.0, 1.0);
-        
-        // Gaussian optical falloff from center of blur disc
         float weight = exp(-2.3 * r * r);
-        
-        // Center samples draw fine details; perimeter samples blend into smooth mip
-        float sampleLod = mix(0.0, baseLod, smoothstep(0.1, 0.85, r));
-        
-        accum += tex.sample(s, sampleUV, level(sampleLod)).rgb * weight;
+
+        accum += tex.sample(s, sampleUV, level(lod)).rgb * weight;
         totalWeight += weight;
     }
-    
+
     float3 blurred = accum / totalWeight;
-    
-    // Soft matte ambient scatter (frosted glass diffusion characteristic)
-    float matteScatter = 0.015 * smoothstep(0.0, 20.0, radius);
-    blurred = blurred + float3(matteScatter);
-    
+
     // Smooth transition from sharp to matte blur as fold begins
     float3 sharp = tex.sample(s, tuv, level(0.0)).rgb;
     return mix(sharp, blurred, smoothstep(0.0, 2.0, radius));
@@ -143,7 +158,16 @@ fragment float4 foldFragment(VertexOut in [[stage_in]],
     
     float2 plane;
     plane.y = 1.0 - fromHinge * cosine * perspective;
-    plane.x = 0.5 + (in.uv.x - 0.5) * perspective;
+    // Horizontal parallax spread. `perspective` pushes the folded plane wider
+    // than the panel as it tilts away; the mask further down turns everything
+    // outside the unit square into the void — that is the black that creeps in
+    // from the left and right edges as the lid folds. `sideVoid` scales ONLY
+    // that horizontal divergence, so the vertical geometry (recession, blur,
+    // void fade) stays identical: 0 keeps the frame at its full width with no
+    // side blackout at all, 1 reproduces the physical projection, and >1
+    // exaggerates the falloff.
+    float sideSpread = 1.0 + (perspective - 1.0) * clamp(u.sideVoid, 0.0, 2.0);
+    plane.x = 0.5 + (in.uv.x - 0.5) * sideSpread;
     
     // Defocus blur: smooth progression that remains continuous and silky.
     // Depth-weighted (hinge stays sharper, outer edge falls off) + velocity-aware:
@@ -160,11 +184,15 @@ fragment float4 foldFragment(VertexOut in [[stage_in]],
     // Sample texture using adaptive Vogel disc continuous matte blur
     float3 color = sampleSmoothMatteBlur(tex, s, plane, radius, u.cover, uiPixel, in.position.xy, quality);
     
-    // Glass refraction & reflection
-    float glass = sine * pow(fromHinge, 1.5);
-    color *= 1.0 - 0.20 * glass;
-    float reflection = exp(-pow((fromHinge - 0.65) / 0.35, 2.0)) * sine;
-    color += float3(0.82, 0.85, 0.86) * reflection * (0.025 * u.reflectionIntensity);
+    // Grazing-angle tint & specular rim. There is NO refraction here: the
+    // frozen image is never bent or lensed. `grazingTint` dims the image up
+    // to 20% toward the top as the panel tilts (light through glass at a
+    // grazing angle); `specularRim` is a Gaussian highlight band centered
+    // 65% up from the hinge that strengthens with tilt.
+    float grazingTint = sine * pow(fromHinge, 1.5);
+    color *= 1.0 - 0.20 * grazingTint;
+    float specularRim = exp(-pow((fromHinge - 0.65) / 0.35, 2.0)) * sine;
+    color += float3(0.82, 0.85, 0.86) * specularRim * (0.025 * u.reflectionIntensity);
 
     // Subtle hinge highlight: narrow specular line near the hinge that grows
     // with bend angle. Sells the physical hinge without faking a crease.

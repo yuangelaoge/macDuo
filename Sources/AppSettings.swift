@@ -31,6 +31,7 @@ public final class AppSettings: ObservableObject {
     private let kCustomImagePath = "mactilt_customImagePath"
     private let kBlurStrength = "mactilt_blurStrength"
     private let kReflectionIntensity = "mactilt_reflectionIntensity"
+    private let kSideVoidAmount = "mactilt_sideVoidAmount"
     private let kShowAngleInMenuBar = "mactilt_showAngleInMenuBar"
     private let kEnableLockScreenPriority = "mactilt_enable_lock_screen_priority"
     private let kHasCompletedOnboarding = "mactilt_hasCompletedOnboarding"
@@ -86,6 +87,21 @@ public final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(reflectionIntensity, forKey: kReflectionIntensity) }
     }
     
+    /// How much black creeps in from the left and right edges as the panel
+    /// folds — the horizontal parallax spread of the projected plane.
+    /// 0.0 = the frozen frame keeps its full width, 1.0 = the physical
+    /// projection (default), up to 2.0 = exaggerated falloff.
+    @Published public var sideVoidAmount: Double {
+        didSet {
+            let clamped = min(max(sideVoidAmount, 0.0), 2.0)
+            if clamped != sideVoidAmount {
+                sideVoidAmount = clamped
+                return
+            }
+            UserDefaults.standard.set(sideVoidAmount, forKey: kSideVoidAmount)
+        }
+    }
+    
     @Published public var showAngleInMenuBar: Bool {
         didSet {
             UserDefaults.standard.set(showAngleInMenuBar, forKey: kShowAngleInMenuBar)
@@ -93,7 +109,7 @@ public final class AppSettings: ObservableObject {
         }
     }
     
-    /// Hides the status bar icon entirely. The control panel stays reachable by
+    /// Hides the status bar icon entirely. Settings stay reachable by
     /// relaunching macTilt from Finder, which reopens the panel.
     @Published public var hideMenuBarIcon: Bool {
         didSet {
@@ -145,6 +161,7 @@ public final class AppSettings: ObservableObject {
         self.customImagePath = defaults.string(forKey: kCustomImagePath) ?? ""
         self.blurStrength = defaults.object(forKey: kBlurStrength) != nil ? defaults.double(forKey: kBlurStrength) : 0.5
         self.reflectionIntensity = defaults.object(forKey: kReflectionIntensity) != nil ? defaults.double(forKey: kReflectionIntensity) : 0.0
+        self.sideVoidAmount = defaults.object(forKey: kSideVoidAmount) != nil ? defaults.double(forKey: kSideVoidAmount) : 1.0
         
         self.showAngleInMenuBar = defaults.object(forKey: kShowAngleInMenuBar) != nil ? defaults.bool(forKey: kShowAngleInMenuBar) : true
         self.hideMenuBarIcon = defaults.object(forKey: kHideMenuBarIcon) != nil ? defaults.bool(forKey: kHideMenuBarIcon) : false

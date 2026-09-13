@@ -170,7 +170,10 @@ public final class OverlayWindowController: NSObject {
         }
     }
     
-    public func update(turn: Double, angle: Double) {
+    /// turn = eased display turn (drives hysteresis/visibility logic);
+    /// target = pre-easing target the view's render loop applies the follow
+    /// filter to (once per displayed frame — see MetalFoldView.draw).
+    public func update(turn: Double, angle: Double, target: Double) {
         guard let win = self.window, let mv = self.metalView else { return }
 
         // Suppress only for genuine clamshell desktop mode: external attached
@@ -189,9 +192,11 @@ public final class OverlayWindowController: NSObject {
             return
         }
 
-        mv.currentTurn = Float(turn)
+        mv.currentTurn = Float(target)
+        mv.followSpeed = AppSettings.shared.followSpeed
         mv.blurStrength = Float(AppSettings.shared.blurStrength)
         mv.reflectionIntensity = Float(AppSettings.shared.reflectionIntensity)
+        mv.sideVoid = Float(AppSettings.shared.sideVoidAmount)
         // Snapshot velocity on main: draw() must never read LidSensor off-main.
         mv.motionBoost = MetalFoldView.velocityBlurBoost()
 

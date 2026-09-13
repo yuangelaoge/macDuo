@@ -20,7 +20,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     public func applicationDidFinishLaunching(_ notification: Notification) {
-        // Run as accessory app with menu bar item, but allow control panel window activation
+        // Run as accessory app with menu bar item, but allow the settings window to activate
         NSApp.setActivationPolicy(.accessory)
         setupQuitShortcut()
         
@@ -29,18 +29,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = OverlayWindowController.shared
         
         let sensor = LidSensor.shared
-        sensor.onTurnUpdate = { turn, angle in
-            OverlayWindowController.shared.update(turn: turn, angle: angle)
+        sensor.onTurnUpdate = { turn, angle, target in
+            OverlayWindowController.shared.update(turn: turn, angle: angle, target: target)
             MenuBarController.shared.updateAngleDisplay(angle: angle, isConnected: AppSettings.shared.isSensorConnected)
         }
         sensor.start()
         
-        // On first launch, open the Apple HCI Onboarding window; otherwise open the control panel
+        // On first launch, open the Apple HCI Onboarding window; otherwise open Settings
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
             if !AppSettings.shared.hasCompletedOnboarding {
                 MenuBarController.shared.openOnboardingWindow()
             } else {
-                MenuBarController.shared.openControlPanel()
+                MenuBarController.shared.openSettingsWindow()
             }
         }
         
@@ -55,11 +55,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     
     /// Escape hatch for the "Hide Menu Bar Icon" setting: with no status item and
     /// an .accessory activation policy there is no Dock icon either, so
-    /// relaunching macTilt from Finder is the only way back. Reopen the control
-    /// panel in that case instead of activating to nothing.
+    /// relaunching macTilt from Finder is the only way back. Reopen Settings in
+    /// that case instead of activating to nothing.
     public func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
-            MenuBarController.shared.openControlPanel()
+            MenuBarController.shared.openSettingsWindow()
         }
         return true
     }

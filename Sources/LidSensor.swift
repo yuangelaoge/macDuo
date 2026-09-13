@@ -7,7 +7,12 @@ import QuartzCore
 public final class LidSensor {
     public static let shared = LidSensor()
     
-    public typealias TurnCallback = (_ turn: Double, _ angle: Double) -> Void
+    /// turn = eased display value (hysteresis/UI/menus), targetTurn = the
+    /// pre-easing target the render loop applies its own follow filter to.
+    /// Publishing both lets the view ease at display-link cadence without
+    /// double-filtering (which would double the lag the lead predictor was
+    /// tuned against).
+    public typealias TurnCallback = (_ turn: Double, _ angle: Double, _ targetTurn: Double) -> Void
     public var onTurnUpdate: TurnCallback?
     public var onPreArmCapture: (() -> Void)?
     
@@ -604,14 +609,27 @@ public final class LidSensor {
                 }
             }
 
-            // Tracks whether this tick consumed a live sample: the predictor
-            // leads only on live data, never coasting through a dropout.
-            // leadHoldStill freezes the lead on confirmed stillness.
+            // Lead tracking is gated on sample AGE, not per-tick freshness.
+            // The HID poll timer and the ease timer share a nominal rate but
+            // are NOT phase-locked (and the main-runloop ease timer jitters
+            // against 120fps draw callbacks), so a large fraction of ticks
+            // see no NEW sample even while the sensor streams perfectly.
+            // Gating the lead on per-tick freshness oscillated the render
+            // target between measured and measured+lead (up to 8° ≈ 7% of
+            // the fold range) at the timer beat frequency — low-frequency,
+            // exactly where the render-side follow filter cannot attenuate
+            // it. That was the dominant real-lid jitter; preview never runs
+            // the predictor, which is why preview looked smooth. The lead is
+            // now held while the newest sample is young (≥100ms, or 3 poll
+            // intervals at low rates); only a genuinely silent sensor falls
+            // back to measured.
             var trackingSample = false
             var leadHoldStill = true
 
             if readOK {
                 let nowTick = CACurrentMediaTime()
+                let sampleAge = nowTick - sampleTime
+                trackingSample = sampleAge < max(0.1, currentPollInterval * 3.0)
                 // Direction steered by dt-normalized VELOCITY (deg/sec), not
                 // per-tick delta: the adaptive clock runs 10..120Hz, so a
                 // genuine 30°/s close reads 3°/tick idle but 0.25°/tick at
@@ -628,11 +646,15 @@ public final class LidSensor {
                     prevConsumedAngle = angle
                     prevConsumedSampleTime = sampleTime
                     hasFreshSample = true
-                    trackingSample = true
-                } else {
-                    // Time-consistent decay (τ=80ms), not a per-tick factor:
-                    // the 10Hz path must forget faster per tick than 120Hz.
-                    smoothedVelocity *= exp(-currentPollInterval / 0.08)
+                } else if sampleAge > currentPollInterval * 2.5 {
+                    // Genuinely starved of samples (dropout), not phase-
+                    // aliased: decay time-consistently over the actual gap.
+                    // A stale tick INSIDE 2.5 intervals is a strict no-op —
+                    // the old unconditional decay sawtoothed velocity while
+                    // data flowed, flickering the direction flags and the
+                    // 120↔60Hz poll-rate decision (which rescheduled the
+                    // timers and fed the aliasing loop).
+                    smoothedVelocity *= exp(-min(sampleAge, 0.3) / 0.08)
                 }
 
                 // Raw sample fires the 120Hz kick (a spurious bump only costs
@@ -658,13 +680,17 @@ public final class LidSensor {
                     // Sub-threshold drift with live samples counts as motion:
                     // after any hesitation, a slow resume must re-arm the
                     // lead instead of latching leadless until a fast flick.
+                    // Stillness ONSET is judged only on fresh samples: a
+                    // phase-aliased stale tick is "no information", never
+                    // evidence of stillness (stale ticks used to start the
+                    // 200ms clock mid-motion).
                     if hasFreshSample && abs(instVelocity) > 2.5 {
                         stillSince = nil
-                    } else if stillSince == nil {
+                    } else if hasFreshSample && stillSince == nil {
                         // Time-based stillness (200ms), not frame-counted: the
                         // adaptive clock runs 10..120Hz, so frame counts lie.
                         stillSince = nowTick
-                    } else if nowTick - stillSince! > 0.2 {
+                    } else if let since = stillSince, nowTick - since > 0.2 {
                         isActivelyClosing = false
                         // Freeze the predictor with the stop: stale velocity
                         // would otherwise overshoot into the reversal.
@@ -674,18 +700,16 @@ public final class LidSensor {
                 // Confirmed stillness is a pure function of (stillSince, now):
                 // no second flag to drift out of sync with the first.
                 leadHoldStill = stillSince.map { nowTick - $0 > 0.2 } ?? false
-                // Confirmed stillness is a pure function of (stillSince, now):
-                // no second flag to drift out of sync with the first.
-                let still: Bool = {
-                    guard let since = stillSince else { return false }
-                    return nowTick - since > 0.2
-                }()
-                leadHoldStill = still
 
                 // If lid is safely open, reset pre-arm latch and mark capture engine dormant
                 if angle >= settings.startTiltAngle || (!isActivelyClosing && angle >= settings.startTiltAngle - 10.0) {
                     hasPreArmedInThisMotion = false
-                    settings.isScreenCaptureDormant = true
+                    // @Published fires objectWillChange on EVERY assignment,
+                    // even no-op ones — this branch runs per-tick while the
+                    // lid is parked open, so gate on actual change.
+                    if settings.isScreenCaptureDormant != true {
+                        settings.isScreenCaptureDormant = true
+                    }
                 }
 
                 // Hardware Pre-Arming Capture Zone: threshold scales with close
@@ -704,9 +728,19 @@ public final class LidSensor {
                 }
 
                 currentRawAngle = angle
-                settings.currentLidAngle = angle
-                settings.isClosing = isActivelyClosing
-                settings.isSensorConnected = true
+                // Gated @Published writes: objectWillChange fires on every
+                // assignment, so an open Settings window would re-render up to
+                // 120x/s on unchanged values. Equality-gate everything that
+                // usually doesn't change.
+                if settings.currentLidAngle != angle {
+                    settings.currentLidAngle = angle
+                }
+                if settings.isClosing != isActivelyClosing {
+                    settings.isClosing = isActivelyClosing
+                }
+                if !settings.isSensorConnected {
+                    settings.isSensorConnected = true
+                }
             }
             
             // Target turn leads the finger: predicted angle masks HID + pipeline
@@ -782,6 +816,6 @@ public final class LidSensor {
         }
         
         adaptPollInterval(angle: currentRawAngle)
-        onTurnUpdate?(displayTurn, currentRawAngle)
+        onTurnUpdate?(displayTurn, currentRawAngle, targetTurn)
     }
 }

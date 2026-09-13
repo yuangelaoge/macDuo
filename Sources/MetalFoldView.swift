@@ -2,6 +2,7 @@ import Foundation
 import Metal
 import MetalKit
 import AppKit
+import QuartzCore
 
 public struct Uniforms {
     public var imageSize: SIMD2<Float>
@@ -12,6 +13,7 @@ public struct Uniforms {
     public var reflectionIntensity: Float
     public var sampleCount: Float
     public var motionBoost: Float
+    public var sideVoid: Float
     
     public init(imageSize: SIMD2<Float> = .init(1, 1),
                 cover: SIMD2<Float> = .init(1, 1),
@@ -20,7 +22,8 @@ public struct Uniforms {
                 blurStrength: Float = 1.0,
                 reflectionIntensity: Float = 1.0,
                 sampleCount: Float = 32.0,
-                motionBoost: Float = 0.0) {
+                motionBoost: Float = 0.0,
+                sideVoid: Float = 1.0) {
         self.imageSize = imageSize
         self.cover = cover
         self.aspect = aspect
@@ -29,20 +32,40 @@ public struct Uniforms {
         self.reflectionIntensity = reflectionIntensity
         self.sampleCount = sampleCount
         self.motionBoost = motionBoost
+        self.sideVoid = sideVoid
     }
+}
+
+/// Uniforms for the gaussian downsample pass (matches PyramidParams in FoldShaders.metal).
+private struct PyramidParams {
+    var srcTexel: SIMD2<Float>
+    var srcLod: Float
+    var pad: Float
 }
 
 public final class MetalFoldView: MTKView, MTKViewDelegate {
     private var commandQueue: MTLCommandQueue?
     private var pipelineState: MTLRenderPipelineState?
+    private var downsamplePipelineState: MTLRenderPipelineState?
     private var samplerState: MTLSamplerState?
     
     private var currentTexture: MTLTexture?
     private var imageSize: SIMD2<Float> = .init(1920, 1080)
     
+    /// Target fold turn (0..1), pre-easing. Written per sensor tick on main;
+    /// the render loop eases toward it once per displayed frame in draw(in:).
     public var currentTurn: Float = 0.0
+    /// Follow responsiveness (rate constant of the exponential follow filter,
+    /// rad/s equivalent of AppSettings.followSpeed). Snapshotted per tick by
+    /// OverlayWindowController so draw() never touches AppSettings.
+    public var followSpeed: Double = 16.0
     public var blurStrength: Float = 0.5
     public var reflectionIntensity: Float = 0.0
+    /// How far the left/right edges fall into the void as the panel folds
+    /// (horizontal parallax spread). 0 = the frozen frame keeps its full
+    /// width, 1 = the physical projection, up to 2 = exaggerated. Snapshotted
+    /// from AppSettings per tick by OverlayWindowController.
+    public var sideVoid: Float = 1.0
     /// Velocity boost snapshot, written on main by OverlayWindowController.
     /// draw(in:) is @MainActor in practice (MTKView marshals there), so this
     /// is main-confined rather than cross-thread — the snapshot still earns
@@ -50,13 +73,51 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
     /// keeping LidSensor reads out of frame encoding.
     public var motionBoost: Float = 0.0
 
+    // MARK: - Render-rate easing (the smoothness core)
+    //
+    // The eased fold value used for drawing. `currentTurn` above is only the
+    // TARGET; the exponential follow filter (same physics as the old tick-side
+    // easing, factor = 1 - exp(-dt * followSpeed)) runs HERE, once per
+    // displayed frame, with the exact display-link dt. The old scheme eased on
+    // a main-runloop Timer (10..120Hz, coalesce/jitter-prone) and the 120Hz
+    // display link then re-rendered each timer value several times before
+    // jumping to the next — temporal aliasing read as judder. Same transfer
+    // function, same lag constant, sampled uniformly at render cadence.
+    private var renderTurn: Float = 0.0
+    private var lastDrawTime: CFTimeInterval = 0
+    /// Render-side eased copy of motionBoost (τ ≈ 80ms). The per-tick
+    /// velocity snapshot steps the blur radius in whole units mid-fold,
+    /// which reads as focus pumping on real lid motion (preview holds it
+    /// near zero, so it never showed there). Same treatment as the turn.
+    private var renderMotionBoost: Float = 0.0
+
     // MARK: - Adaptive quality (close path only)
 
-    /// 12 taps near open, 20 mid-fold, 32 on deep/fast close. Matches shader clamp.
-    static func adaptiveSampleCount(turn: Float) -> Float {
+    /// Base tap count for a turn value: 12 near open, 20 mid-fold, 32 deep.
+    private static func baseSampleCount(turn: Float) -> Float {
         if turn < 0.20 { return 12.0 }
         if turn < 0.60 { return 20.0 }
         return 32.0
+    }
+
+    private var lastSampleCount: Float = 12.0
+
+    /// Hysteresis-banded adaptive tap count. A hard threshold at 0.20/0.60
+    /// lets a turn value jittering around the boundary flip 12↔20 taps — and
+    /// each flip subtly changes blur character, which reads as shimmer
+    /// mid-fold. Rising: 0.20/0.60 (matches the old thresholds); falling:
+    /// 0.16/0.56. Reset from the base table on every show (snap path).
+    private func adaptiveSampleCount(turn: Float) -> Float {
+        if lastSampleCount <= 12.0 {
+            if turn >= 0.60 { lastSampleCount = 32.0 }
+            else if turn >= 0.20 { lastSampleCount = 20.0 }
+        } else if lastSampleCount <= 20.0 {
+            if turn >= 0.60 { lastSampleCount = 32.0 }
+            else if turn < 0.16 { lastSampleCount = 12.0 }
+        } else if turn < 0.56 {
+            lastSampleCount = (turn < 0.16) ? 12.0 : 20.0
+        }
+        return lastSampleCount
     }
 
     /// Velocity-aware boost in blur-radius units. Dead-zoned + clamped so HID
@@ -95,6 +156,9 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
     func suspendRendering() {
         isPaused = true
         releaseDrawables()
+        // Invalidate the easing clock: the first draw after resume must SNAP
+        // to the current target, never interpolate across the hidden gap.
+        lastDrawTime = 0
     }
     
     public init(frame: CGRect) {
@@ -185,6 +249,16 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
         pipeDesc.colorAttachments[0].pixelFormat = self.colorPixelFormat
         
         self.pipelineState = try? dev.makeRenderPipelineState(descriptor: pipeDesc)
+
+        // Gaussian pyramid downsample pipeline: same fullscreen-triangle
+        // vertex stage, binomial 3x3 fragment. Built once, reused per upload.
+        if let downsampleFunc = lib.makeFunction(name: "gaussianDownsampleFragment") {
+            let downDesc = MTLRenderPipelineDescriptor()
+            downDesc.vertexFunction = vertexFunc
+            downDesc.fragmentFunction = downsampleFunc
+            downDesc.colorAttachments[0].pixelFormat = self.colorPixelFormat
+            self.downsamplePipelineState = try? dev.makeRenderPipelineState(descriptor: downDesc)
+        }
     }
     
     // Monotonic generation: drops stale uploads when captures overlap.
@@ -211,8 +285,8 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
 
         uploadQueue.async { [weak self] in
             guard let self else { return }
-            // Shader samples LOD 0..1.85 only — 3 levels, not the full ~11.
-            let levels = 3
+            // 6-level gaussian pyramid (LOD 0..5) for the real blur.
+            let levels = 6
 
             // BGRA storage everywhere (not RGBA): the warm-stream path maps
             // IOSurface frames that ARE BGRA, and blit copies require
@@ -225,7 +299,9 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
                 mipmapped: true
             )
             desc.mipmapLevelCount = levels
-            desc.usage = [.shaderRead]
+            // .renderTarget: each mip level above 0 is rendered into by the
+            // gaussian downsample passes (not generated by the box filter).
+            desc.usage = [.shaderRead, .renderTarget]
             desc.storageMode = .private
 
             // Stage through a shared CPU-visible texture, then GPU-side blit
@@ -274,9 +350,7 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
                       to: texture, destinationSlice: 0, destinationLevel: 0,
                       destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
             copy.endEncoding()
-            guard let mips = cb.makeBlitCommandEncoder() else { return }
-            mips.generateMipmaps(for: texture)
-            mips.endEncoding()
+            encodeGaussianPyramid(texture: texture, levels: levels, commandBuffer: cb)
             // Publish on completion: assignment lands on main only for the
             // newest generation; older overlapping uploads are discarded.
             cb.addCompletedHandler { [weak self] _ in
@@ -314,8 +388,8 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
                 height: copyHeight,
                 mipmapped: true
             )
-            desc.mipmapLevelCount = 3
-            desc.usage = [.shaderRead]
+            desc.mipmapLevelCount = 6
+            desc.usage = [.shaderRead, .renderTarget]
             desc.storageMode = .private
             guard let texture = dev.makeTexture(descriptor: desc),
                   let cb = cq.makeCommandBuffer(),
@@ -326,9 +400,7 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
                       to: texture, destinationSlice: 0, destinationLevel: 0,
                       destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
             copy.endEncoding()
-            guard let mips = cb.makeBlitCommandEncoder() else { return }
-            mips.generateMipmaps(for: texture)
-            mips.endEncoding()
+            encodeGaussianPyramid(texture: texture, levels: 6, commandBuffer: cb)
             // keeper captured through completion: the source mapping must
             // outlive the GPU work, not just the CPU-side encoding.
             cb.addCompletedHandler { [weak self, keeper] _ in
@@ -343,6 +415,39 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
         }
     }
     
+    /// True gaussian blur pyramid: level k+1 = binomial 3x3 of level k at
+    /// half resolution (σ doubles per level; 6 levels total). Rendered once
+    /// per texture upload on this command buffer — consecutive passes write
+    /// mip k while sampling mip k-1 of the same texture (different
+    /// subresources, ordered across encoders by Metal's hazard tracking).
+    /// Total cost ≈ 33% of one fullscreen pass, paid once per capture,
+    /// never per frame. Replaces the old box-filter generateMipmaps, whose
+    /// flat average-color blobs read as "fake blur" (opaque spread).
+    private func encodeGaussianPyramid(texture: MTLTexture, levels: Int, commandBuffer cb: MTLCommandBuffer) {
+        guard let pipe = downsamplePipelineState, let sampler = samplerState else { return }
+        for level in 1..<levels {
+            let rpd = MTLRenderPassDescriptor()
+            rpd.colorAttachments[0].texture = texture
+            rpd.colorAttachments[0].level = level
+            rpd.colorAttachments[0].loadAction = .dontCare
+            rpd.colorAttachments[0].storeAction = .store
+            guard let enc = cb.makeRenderCommandEncoder(descriptor: rpd) else { return }
+            let prevW = max(1, texture.width >> (level - 1))
+            let prevH = max(1, texture.height >> (level - 1))
+            var params = PyramidParams(
+                srcTexel: SIMD2<Float>(1.0 / Float(prevW), 1.0 / Float(prevH)),
+                srcLod: Float(level - 1),
+                pad: 0
+            )
+            enc.setRenderPipelineState(pipe)
+            enc.setFragmentTexture(texture, index: 0)
+            enc.setFragmentSamplerState(sampler, index: 0)
+            enc.setFragmentBytes(&params, length: MemoryLayout<PyramidParams>.stride, index: 0)
+            enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6)
+            enc.endEncoding()
+        }
+    }
+
     // MARK: - MTKViewDelegate
     
     public func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
@@ -357,25 +462,54 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
               let encoder = cb.makeRenderCommandEncoder(descriptor: renderPassDesc) else {
             return
         }
-        
+
+        // Render-rate easing: advance the exponential follow filter toward
+        // the target exactly once per displayed frame. Identical physics to
+        // the previous tick-side easing (same τ = 1/followSpeed, same lead
+        // prediction upstream) — only the sampling grid changes, from a
+        // jittery 10..120Hz main-runloop timer to the uniform display-link
+        // cadence. Snap on the first frame after (re)start; clamp dt so a
+        // stall between frames can never produce a teleport.
+        let now = CACurrentMediaTime()
+        if lastDrawTime <= 0.0 {
+            renderTurn = currentTurn
+            renderMotionBoost = motionBoost
+            lastSampleCount = Self.baseSampleCount(turn: renderTurn)
+        } else {
+            let dt = min(max(now - lastDrawTime, 0.0), 0.1)
+            if dt > 0.0 {
+                let factor = 1.0 - exp(-dt * followSpeed)
+                renderTurn += (currentTurn - renderTurn) * Float(factor)
+                if abs(currentTurn - renderTurn) < 0.0005 {
+                    renderTurn = currentTurn
+                }
+                // Velocity blur boost eases per frame too: per-tick steps
+                // in the blur radius read as focus pumping.
+                let mbFactor = 1.0 - exp(-dt * 12.5) // τ ≈ 80ms
+                renderMotionBoost += (motionBoost - renderMotionBoost) * Float(mbFactor)
+            }
+        }
+        lastDrawTime = now
+
         let viewSize = view.drawableSize
         let aspect = Float(viewSize.width / max(1.0, viewSize.height))
         let imgAspect = imageSize.x / max(1.0, imageSize.y)
-        
+
         let cover = SIMD2<Float>(
             min(1.0, aspect / imgAspect),
             min(1.0, imgAspect / aspect)
         )
-        
+
         var uniforms = Uniforms(
             imageSize: imageSize,
             cover: cover,
             aspect: aspect,
-            turn: currentTurn,
+            turn: renderTurn,
             blurStrength: blurStrength,
             reflectionIntensity: reflectionIntensity,
-            sampleCount: Self.adaptiveSampleCount(turn: currentTurn),
-            motionBoost: motionBoost
+            sampleCount: adaptiveSampleCount(turn: renderTurn),
+            motionBoost: renderMotionBoost,
+            sideVoid: sideVoid
         )
         
         encoder.setRenderPipelineState(pipeline)

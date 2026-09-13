@@ -1,15 +1,21 @@
 import Foundation
 import AppKit
 import SwiftUI
+import QuartzCore
 
 public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate {
     public static let shared = MenuBarController()
     
     private var statusItem: NSStatusItem?
-    private var controlPanelWindow: NSWindow?
+    private var settingsWindow: NSWindow?
     private var onboardingWindow: NSWindow?
     private var lastAngle: Double = 120.0
     private var lastIsConnected: Bool = false
+    // Status item title writes are WindowServer IPC + text shaping on main.
+    // At sensor tick rate (up to 120Hz mid-fold) they compete directly with
+    // fold frame encoding. Throttle to ~12Hz — the integer degree readout
+    // still reads completely live to the eye.
+    private var lastTitleUpdateTime: CFTimeInterval = 0
     
     public override init() {
         super.init()
@@ -42,11 +48,15 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
     public func updateAngleDisplay(angle: Double, isConnected: Bool) {
         lastAngle = angle
         lastIsConnected = isConnected
-        
+
+        let now = CACurrentMediaTime()
+        guard now - lastTitleUpdateTime >= 0.08 else { return }
+        lastTitleUpdateTime = now
+
         if let button = statusItem?.button {
             if AppSettings.shared.showAngleInMenuBar && AppSettings.shared.isHardwareSensor {
                 button.title = " \(Int(angle))°"
-            } else {
+            } else if !button.title.isEmpty {
                 button.title = ""
             }
         }
@@ -77,7 +87,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         // 2. Update Available (if any)
         if UpdateChecker.shared.updateAvailable {
             let updateItem = NSMenuItem(
-                title: "✨ Download \(UpdateChecker.shared.latestVersion) Update...",
+                title: "Download \(UpdateChecker.shared.latestVersion) Update...",
                 action: #selector(openLatestRelease),
                 keyEquivalent: ""
             )
@@ -106,7 +116,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
             menu.addItem(NSMenuItem.separator())
             
             let previewItem = NSMenuItem(
-                title: "▶ Preview Opening Animation",
+                title: "Preview Opening Animation",
                 action: #selector(triggerOpeningPreview),
                 keyEquivalent: "p"
             )
@@ -115,10 +125,10 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
             
             let durationSubmenu = NSMenu(title: "Opening Speed")
             let speeds: [(title: String, duration: Double)] = [
-                ("⚡ Snappy (0.60s)", 0.60),
-                ("✨ Natural (0.95s)", 0.95),
-                ("🎬 Smooth (1.40s)", 1.40),
-                ("🍿 Cinematic (2.00s)", 2.00)
+                ("Snappy (0.60s)", 0.60),
+                ("Natural (0.95s)", 0.95),
+                ("Smooth (1.40s)", 1.40),
+                ("Cinematic (2.00s)", 2.00)
             ]
             
             let currentDur = AppSettings.shared.clamshellOpeningDuration
@@ -143,13 +153,13 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         
         menu.addItem(NSMenuItem.separator())
         
+        let openSettings = NSMenuItem(title: "Settings...", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        openSettings.target = self
+        menu.addItem(openSettings)
+        
         let checkUpdatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "u")
         checkUpdatesItem.target = self
         menu.addItem(checkUpdatesItem)
-        
-        let openSettings = NSMenuItem(title: "Control Panel & Settings...", action: #selector(openControlPanel), keyEquivalent: ",")
-        openSettings.target = self
-        menu.addItem(openSettings)
         
         menu.addItem(NSMenuItem.separator())
         
@@ -158,27 +168,31 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         menu.addItem(quitItem)
     }
     
-    @objc public func openControlPanel() {
-        if let existing = controlPanelWindow {
+    @objc public func openSettingsWindow() {
+        if let existing = settingsWindow {
             existing.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
             return
         }
         
+        // Content size matches the panel's design size exactly (500 x 650), and
+        // the window is resizable so the layout can actually use more room —
+        // the root view is flexible, so there is never dead space at the edges.
         let win = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 480, height: 680),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 500, height: 650),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
+        win.contentMinSize = NSSize(width: 480, height: 560)
         win.center()
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
         win.isMovableByWindowBackground = true
-        win.contentViewController = NSHostingController(rootView: LiquidGlassControlPanel())
+        win.contentViewController = NSHostingController(rootView: LiquidGlassSettingsView())
         win.isReleasedWhenClosed = false
         
-        self.controlPanelWindow = win
+        self.settingsWindow = win
         win.delegate = self
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
@@ -204,7 +218,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         
         let onboardingView = OnboardingView { [weak self, weak win] in
             win?.close()
-            self?.openControlPanel()
+            self?.openSettingsWindow()
         }
         
         win.contentViewController = NSHostingController(rootView: onboardingView)
@@ -218,7 +232,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
     // MARK: - NSWindowDelegate
     
     public func windowWillClose(_ notification: Notification) {
-        // When the control panel is dismissed, always clear test mode so the
+        // When the settings window is dismissed, always clear test mode so the
         // fold overlay doesn't stay frozen on screen.
         if AppSettings.shared.isTestModeActive {
             AppSettings.shared.isTestModeActive = false

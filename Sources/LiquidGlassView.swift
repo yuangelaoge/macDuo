@@ -14,68 +14,83 @@ private let cardBorder = Color(nsColor: NSColor(name: nil, dynamicProvider: { ap
         : NSColor(white: 0.0, alpha: 0.08)
 }))
 
-public struct LiquidGlassControlPanel: View {
+public struct LiquidGlassSettingsView: View {
     @ObservedObject var settings: AppSettings = AppSettings.shared
     @ObservedObject var updater: UpdateChecker = UpdateChecker.shared
     @State private var copiedResetCommand: Bool = false
     @State private var showingPermissionTroubleshooting: Bool = false
+    @State private var demoToken: Int = 0
     private let resetCommand = "tccutil reset ScreenCapture com.lqsky7.mactilt"
     
     public init() {}
     
     public var body: some View {
-        VStack(spacing: 0) {
-            // Top Header Bar
-            headerBar
-                .padding(.horizontal, 20)
-                .padding(.top, 20)
-                .padding(.bottom, 14)
-            
-            Divider()
-            
-            // Main Settings Scroll Area (All cards match exactly in horizontal width)
-            ScrollView {
-                VStack(spacing: 14) {
-                    // Screen Recording Permission Card
-                    permissionCard
-                    
-                    // Battery & Performance Card
-                    batteryCard
-                    
-                    // Tilt Trigger Angles Card (Hardware LAS) vs Clamshell Opening Card (No LAS)
-                    if settings.isHardwareSensor {
-                        tiltCard
-                    } else {
-                        clamshellOpeningCard
-                    }
-                    
-                    // Display Source & Menu Bar Card
-                    displaySourceCard
-                    
-                    // Animation Physics & Shaders Card
-                    animationPhysicsCard
-                    
-                    // Lock Screen & Sleep Wake Card (Optional)
-                    lockScreenCard
-                    
-                    // Interactive Test Slider Card
-                    testPreviewCard
-                    
-                    // Software Updates & Release Card
-                    softwareUpdateCard
+        // Header and footer are safe-area insets rather than VStack rows, so the
+        // card list scrolls BENEATH them and the translucent material has
+        // something real to blur as it passes under the bar.
+        ScrollView {
+            VStack(spacing: 14) {
+                // Screen Recording Permission Card
+                permissionCard
+                
+                // Battery & Performance Card
+                batteryCard
+                
+                // Tilt Trigger Angles Card (Hardware LAS) vs Clamshell Opening Card (No LAS)
+                if settings.isHardwareSensor {
+                    tiltCard
+                } else {
+                    clamshellOpeningCard
                 }
-                .padding(.horizontal, 20)
-                .padding(.vertical, 16)
+                
+                // Display Source & Menu Bar Card
+                displaySourceCard
+                
+                // Animation Physics & Shaders Card
+                animationPhysicsCard
+                
+                // Lock Screen & Sleep Wake Card (Optional)
+                lockScreenCard
+                
+                // Interactive Test Slider Card
+                testPreviewCard
+                
+                // Software Updates & Release Card
+                softwareUpdateCard
             }
-            
-            Divider()
-            
-            // Bottom Action Footer
-            footerBar
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
         }
-        .frame(width: 500, height: 650)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            VStack(spacing: 0) {
+                headerBar
+                    .padding(.horizontal, 20)
+                    .padding(.top, 20)
+                    .padding(.bottom, 14)
+                
+                Divider()
+            }
+            // Pin the bar (and therefore its material) to the full window width
+            // instead of letting it hug the wordmark and the chip, and let the
+            // material bleed up under the transparent titlebar.
+            .frame(maxWidth: .infinity)
+            .background(.thinMaterial, ignoresSafeAreaEdges: .all)
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                Divider()
+                
+                footerBar
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 14)
+            }
+            .frame(maxWidth: .infinity)
+            .background(.thinMaterial, ignoresSafeAreaEdges: .all)
+        }
+        // Fill whatever the window hands us rather than pinning a hard size, so
+        // growing the window never leaves dead space around the panel.
+        .frame(minWidth: 480, idealWidth: 500, maxWidth: .infinity,
+               minHeight: 560, idealHeight: 650, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear {
             settings.refreshPermissions()
@@ -88,57 +103,42 @@ public struct LiquidGlassControlPanel: View {
     }
     
     // MARK: - Header Bar
+    //
+    // Deliberately unadorned: the wordmark alone on the left, and a single
+    // measurement chip on the right. No icon tile, no tagline — the panel's
+    // own sections carry the explanation.
     private var headerBar: some View {
-        HStack(spacing: 14) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .fill(cardBackground)
-                    .frame(width: 44, height: 44)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .stroke(cardBorder, lineWidth: 0.5)
-                    )
-                
-                Image(systemName: "laptopcomputer")
-                    .font(.system(size: 22, weight: .medium))
-                    .foregroundStyle(settings.isSensorConnected ? Color.accentColor : Color.secondary)
-            }
+        HStack(spacing: 12) {
+            Text("macTilt")
+                .font(.system(size: 26, weight: .thin))
+                .foregroundStyle(.primary)
             
-            VStack(alignment: .leading, spacing: 2) {
-                Text("macTilt")
-                    .font(.title3)
-                    .fontWeight(.bold)
-                
-                Text("MacBook Clamshell Fold Animation")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Spacer(minLength: 0)
             
-            Spacer()
-            
-            // Real-time Hardware Angle Badge
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(settings.isSensorConnected ? Color.green : Color.orange)
-                    .frame(width: 8, height: 8)
-                
-                VStack(alignment: .trailing, spacing: 1) {
-                    if settings.isHardwareSensor {
-                        Text("\(Int(settings.currentLidAngle))°")
-                            .font(.system(size: 18, weight: .bold, design: .rounded))
-                        Text(angleStatusText)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        Text("Clamshell")
-                            .font(.system(size: 15, weight: .bold, design: .rounded))
-                        Text("Opening Mode")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                    }
+            // Live reading chip. The source of the number is named in small
+            // translucent type underneath it, so the badge reads as a
+            // measurement rather than a status label.
+            VStack(alignment: .trailing, spacing: 0) {
+                if settings.isHardwareSensor {
+                    Text("\(Int(settings.currentLidAngle))°")
+                        .font(.system(size: 21, weight: .light))
+                        .monospacedDigit()
+                    Text("LAS")
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
+                        .opacity(0.6)
+                } else {
+                    Text("Clamshell")
+                        .font(.system(size: 15, weight: .light))
+                    Text("No LAS")
+                        .font(.system(size: 9, weight: .medium))
+                        .tracking(0.8)
+                        .foregroundStyle(.secondary)
+                        .opacity(0.6)
                 }
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
             .padding(.vertical, 6)
             .background(cardBackground)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -146,17 +146,6 @@ public struct LiquidGlassControlPanel: View {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(cardBorder, lineWidth: 0.5)
             )
-        }
-    }
-    
-    private var angleStatusText: String {
-        if settings.currentLidAngle >= settings.startTiltAngle {
-            return "Using Mac (Open)"
-        } else if settings.currentLidAngle <= settings.endTiltAngle {
-            return "Lid Closed"
-        } else {
-            let pct = Int(settings.normalizedTurn(for: settings.currentLidAngle) * 100)
-            return "Fold (\(pct)%)"
         }
     }
     
@@ -370,7 +359,7 @@ public struct LiquidGlassControlPanel: View {
                         settings.clamshellOpeningDuration = 0.60
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("⚡ Snappy")
+                        Text("Snappy")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -379,7 +368,7 @@ public struct LiquidGlassControlPanel: View {
                         settings.clamshellOpeningDuration = 0.95
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("✨ Natural")
+                        Text("Natural")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -388,7 +377,7 @@ public struct LiquidGlassControlPanel: View {
                         settings.clamshellOpeningDuration = 1.60
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("🎬 Cinematic")
+                        Text("Cinematic")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -479,7 +468,7 @@ public struct LiquidGlassControlPanel: View {
                             .foregroundStyle(.secondary)
                     }
                     
-                    InfoButton("Hide Menu Bar Icon", content: "Removes macTilt from the menu bar completely. The app keeps running and the fold animation keeps working. Reopen macTilt from Applications to show this control panel again.")
+                    InfoButton("Hide Menu Bar Icon", content: "Removes macTilt from the menu bar completely. The app keeps running and the fold animation keeps working. Reopen macTilt from Applications to show Settings again.")
                     
                     Spacer()
                     
@@ -500,7 +489,12 @@ public struct LiquidGlassControlPanel: View {
                         Text("Follow Responsiveness")
                             .font(.subheadline)
                         
-                        InfoButton("Follow Speed", content: "Controls the exponential smoothing physics of the display turn.")
+                        InfoButton(
+                            "Follow Responsiveness",
+                            content: "How fast the fold chases the physical lid — the response time of the motion smoothing. Lower = softer and more fluid; higher = tighter, more immediate tracking.",
+                            demoLabel: "Show me the glide",
+                            demo: { demoFold(0.7, animated: false) }
+                        )
                         
                         Spacer()
                         
@@ -514,12 +508,18 @@ public struct LiquidGlassControlPanel: View {
                 
                 Divider()
                 
-                // Blur and Glass Dual Sliders
+                // Blur and Specular Dual Sliders
                 HStack(spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text("Blur Intensity")
                                 .font(.subheadline)
+                            InfoButton(
+                                "Blur Intensity",
+                                content: "Depth of the matte defocus that ramps up as the lid tilts — deeper folds and faster closes get softer. The blur is built from the mip chain, so it stays an even, silky matte at every intensity instead of turning grainy frosted glass.",
+                                demoLabel: "Show me at 55% fold",
+                                demo: { demoFold(0.55) }
+                            )
                             Spacer()
                             Text(String(format: "%.1fx", settings.blurStrength))
                                 .font(.caption)
@@ -528,11 +528,17 @@ public struct LiquidGlassControlPanel: View {
                         }
                         Slider(value: $settings.blurStrength, in: 0.2...2.0, step: 0.1)
                     }
-                    
+
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Glass Reflection")
+                            Text("Specular Reflection")
                                 .font(.subheadline)
+                            InfoButton(
+                                "Specular Reflection",
+                                content: "A soft cool-white highlight band that sweeps up from the hinge as the screen tilts away — like light catching a glass panel at an angle. The frozen image is never bent or lensed; this only adds the shine. 0 = off (default).",
+                                demoLabel: "Show me at 75% fold",
+                                demo: { demoFold(0.75) }
+                            )
                             Spacer()
                             Text(String(format: "%.1fx", settings.reflectionIntensity))
                                 .font(.caption)
@@ -541,6 +547,28 @@ public struct LiquidGlassControlPanel: View {
                         }
                         Slider(value: $settings.reflectionIntensity, in: 0.0...2.5, step: 0.1)
                     }
+                }
+                
+                Divider()
+                
+                // Side Blackout — horizontal parallax void
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text("Side Blackout")
+                            .font(.subheadline)
+                        InfoButton(
+                            "Side Blackout",
+                            content: "How much black creeps in from the left and right edges as the panel folds away from you. This is the horizontal parallax spread of the folded plane: 0% keeps the frozen frame at its full width, 100% is the physical projection, and higher values let the edges fall away harder.",
+                            demoLabel: "Show me at 75% fold",
+                            demo: { demoFold(0.75) }
+                        )
+                        Spacer()
+                        Text("\(Int(settings.sideVoidAmount * 100))%")
+                            .font(.caption)
+                            .fontWeight(.semibold)
+                            .monospacedDigit()
+                    }
+                    Slider(value: $settings.sideVoidAmount, in: 0.0...2.0, step: 0.05)
                 }
             }
         }
@@ -687,7 +715,7 @@ public struct LiquidGlassControlPanel: View {
                     
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("🎉 \(updater.latestVersion) Ready to Install")
+                            Text("\(updater.latestVersion) Ready to Install")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
                             Text("Download the latest universal DMG installer directly from GitHub Releases.")
@@ -758,6 +786,37 @@ public struct LiquidGlassControlPanel: View {
         }
     }
     
+    /// Live demonstration: shows the fullscreen fold at a representative
+    /// progress for a few seconds, then eases out. The popover closes first
+    /// so the demo is visible (the overlay covers all windows).
+    private func demoFold(_ turn: Double, animated: Bool = true) {
+        demoToken += 1
+        let token = demoToken
+        settings.isTestModeActive = true
+        OverlayWindowController.shared.captureScreenAsync()
+        if animated {
+            withAnimation(.easeInOut(duration: 0.5)) {
+                settings.testTurnValue = turn
+            }
+        } else {
+            settings.testTurnValue = turn
+        }
+        let capturedSettings = settings
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.8) {
+            guard token == self.demoToken else { return }
+            withAnimation(.easeOut(duration: 0.5)) {
+                capturedSettings.testTurnValue = 0.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                guard token == self.demoToken else { return }
+                if capturedSettings.testTurnValue == 0.0 {
+                    capturedSettings.isTestModeActive = false
+                    OverlayWindowController.shared.stopOverlay()
+                }
+            }
+        }
+    }
+
     private func selectCustomImage() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image, .png, .jpeg]
@@ -816,13 +875,17 @@ private struct HCISectionCard<Content: View>: View {
 private struct InfoButton: View {
     let title: String
     let content: String
+    var demoLabel: String? = nil
+    var demo: (() -> Void)? = nil
     @State private var isShowing: Bool = false
-    
-    init(_ title: String = "", content: String) {
+
+    init(_ title: String = "", content: String, demoLabel: String? = nil, demo: (() -> Void)? = nil) {
         self.title = title
         self.content = content
+        self.demoLabel = demoLabel
+        self.demo = demo
     }
-    
+
     var body: some View {
         Button {
             isShowing.toggle()
@@ -833,7 +896,7 @@ private struct InfoButton: View {
         }
         .buttonStyle(.plain)
         .popover(isPresented: $isShowing, arrowEdge: .trailing) {
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 8) {
                 if !title.isEmpty {
                     Text(title)
                         .font(.headline)
@@ -843,9 +906,19 @@ private struct InfoButton: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .lineSpacing(2)
+                if let demoLabel, let demo {
+                    Button {
+                        isShowing = false
+                        demo()
+                    } label: {
+                        Label(demoLabel, systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
             }
             .padding(12)
-            .frame(width: 260)
+            .frame(width: 280)
         }
     }
 }
