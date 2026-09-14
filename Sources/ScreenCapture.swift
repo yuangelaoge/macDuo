@@ -164,7 +164,10 @@ public final class ScreenCapture {
             let filter = cachedDisplayFilter(for: display, in: content)
             let config = SCStreamConfiguration()
             // NSScreen is main-thread-only; this runs on background tasks.
-            let scale = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2.0 }
+            // The built-in panel's scale, because the built-in panel is what
+            // preferredDisplay() captured — an external monitor's scale would
+            // resample the laptop's own image.
+            let scale = await MainActor.run { DisplayTopology.builtInBackingScale() }
             let targetW = max(2, Int(Double(display.width) * Double(scale) * Double(scaleFactor)))
             let targetH = max(2, Int(Double(display.height) * Double(scale) * Double(scaleFactor)))
             config.width = targetW
@@ -217,7 +220,10 @@ public final class ScreenCapture {
     
     /// Get user's current desktop wallpaper
     public func fetchWallpaperImage() -> CGImage? {
-        guard let screen = NSScreen.main,
+        // The built-in panel's wallpaper: the fold stands in for that panel, so
+        // its wallpaper is the right one even when an external monitor holds
+        // focus. Falls back to the main screen on a desktop Mac.
+        guard let screen = DisplayTopology.builtInScreen() ?? NSScreen.main,
               let url = NSWorkspace.shared.desktopImageURL(for: screen),
               let image = NSImage(contentsOf: url) else {
             return nil

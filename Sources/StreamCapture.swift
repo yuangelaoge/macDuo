@@ -164,7 +164,8 @@ public final class StreamCapture: NSObject, @unchecked Sendable {
             // the Vogel disc so the tap pattern reads as pixelation.
             // Cursor stays out: a frozen cursor over live desktop reads as bug.
             // NSScreen is main-thread-only: resolve the scale on MainActor.
-            let scale = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2.0 }
+            // The built-in panel's scale — that is the display being captured.
+            let scale = await MainActor.run { DisplayTopology.builtInBackingScale() }
             let config = SCStreamConfiguration()
             config.width = max(2, Int(Double(display.width) * Double(scale)))
             config.height = max(2, Int(Double(display.height) * Double(scale)))

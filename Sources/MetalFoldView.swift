@@ -134,11 +134,14 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
     /// 120fps on ProMotion internal, 60 on the 60Hz externals most desks use
     /// (half the drawable acquisitions + fragment cost for frames the panel
     /// never shows). Set once here — never mutated mid-frame. Called on show.
-    /// Resolves the screen from NSScreen.main, not window.screen: resume runs
-    /// before orderFront, when the window has no screen yet (nil → 60 would
-    /// pin the ProMotion first impression to half cadence).
+    /// Resolves the built-in panel, not window.screen: resume runs before
+    /// orderFront, when the window has no screen yet (nil → 60 would pin the
+    /// ProMotion first impression to half cadence). `NSScreen.screens` needs no
+    /// window, and the built-in panel is the one being folded — the main
+    /// screen's cadence is the wrong answer when an external monitor holds
+    /// focus.
     func resumeRendering() {
-        let panelMax = NSScreen.main?.maximumFramesPerSecond ?? 60
+        let panelMax = (DisplayTopology.builtInScreen() ?? NSScreen.main)?.maximumFramesPerSecond ?? 60
         preferredFramesPerSecond = min(120, max(30, panelMax))
         if isPaused {
             isPaused = false

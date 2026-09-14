@@ -64,8 +64,7 @@ public final class OverlayWindowController: NSObject {
     /// and on every show transition (cheap, runs once per fold — closes the
     /// staleness window where a lid-close lands before any notification).
     private func refreshSuppression() {
-        let count = NSScreen.screens.count
-        suppressForClamshell = count > 1 && Self.isBuiltInPanelAsleepOrGone() && Self.hasBuiltInPanelOnline() && LidSensor.shared.isLidPhysicallyClosed
+        suppressForClamshell = DisplayTopology.isClamshellDesktop
     }
     
     public override init() {
@@ -92,8 +91,11 @@ public final class OverlayWindowController: NSObject {
         // Mode changes reuse displayIDs with new geometry — cached filters lie.
         ScreenCapture.shared.invalidateCaches()
         StreamCapture.shared.restart()
-        // Refit the overlay to the (possibly new) main screen geometry.
-        if let win = window, let screen = NSScreen.main ?? NSScreen.screens.first {
+        // Refit the overlay to the (possibly new) built-in panel geometry.
+        // Never the main screen: with an external monitor attached the main
+        // screen is usually the external one, and a fullscreen overlay there is
+        // a black screen on a monitor the lid does not control.
+        if let win = window, let screen = Self.foldScreen() {
             win.setFrame(screen.frame, display: false)
         }
     }
@@ -136,6 +138,14 @@ public final class OverlayWindowController: NSObject {
     private func handleWake() {
         wasZeroTurn = true
         refreshSuppression()
+        // No fold is possible in clamshell desktop mode, so do not arm anything
+        // for one: the built-in panel is asleep, so the stream would warm
+        // against a display nobody is looking at and the SkyLight delegation
+        // would move a window that is never ordered in.
+        guard !suppressForClamshell else {
+            AppSettings.shared.isScreenCaptureDormant = true
+            return
+        }
         if let win = self.window, AppSettings.shared.enableLockScreenPriority {
             SkyLightOperator.shared.delegateWindow(win)
         }
@@ -146,7 +156,8 @@ public final class OverlayWindowController: NSObject {
     }
     
     private func setupWindow() {
-        guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        // The built-in panel, not `NSScreen.main` — see foldScreen().
+        guard let screen = Self.foldScreen() else { return }
         
         let win = NSWindow(
             contentRect: screen.frame,
@@ -429,6 +440,14 @@ public final class OverlayWindowController: NSObject {
                     return
                 }
                 wasZeroTurn = false
+                // Re-assert the built-in panel's geometry. The window is born
+                // on the built-in panel, but a display change that arrived
+                // while hidden could have left it fitted to something else —
+                // and a fullscreen overlay on the wrong monitor is a black
+                // screen, not a cosmetic bug.
+                if let builtIn = DisplayTopology.builtInScreen(), win.frame != builtIn.frame {
+                    win.setFrame(builtIn.frame, display: false)
+                }
                 win.alphaValue = 1.0
                 // Full invalidation on show: SCK captures the composited
                 // framebuffer regardless of sharingType (15.4+), so a filter
@@ -495,36 +514,15 @@ public final class OverlayWindowController: NSObject {
         // Between thresholds: hold last state (hysteresis band), no flapping.
     }
 
-    /// Built-in panel asleep-or-absent from ACTIVE space = genuine clamshell
-    /// desktop mode. (Asleep displays stay in display space, so presence
-    /// alone proves nothing — sleep state decides.)
-    private static func isBuiltInPanelAsleepOrGone() -> Bool {
-        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetActiveDisplayList(16, &displays, &count) == .success else { return false }
-        for i in 0..<Int(count) {
-            if CGDisplayIsBuiltin(displays[i]) != 0 {
-                return CGDisplayIsAsleep(displays[i]) != 0
-            }
-        }
-        // No built-in panel in display space (closed clamshell) → suppress.
-        return true
-    }
-
-    /// Laptop-ness gate: the ONLINE list retains sleeping displays, so a
-    /// builtin-less desktop Mac (mini/Studio) is distinguishable from a
-    /// closed clamshell. Without it, multi-display desktops would suppress
-    /// the effect (and its preview) permanently.
-    private static func hasBuiltInPanelOnline() -> Bool {
-        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
-        var count: UInt32 = 0
-        guard CGGetOnlineDisplayList(16, &displays, &count) == .success else { return false }
-        for i in 0..<Int(count) {
-            if CGDisplayIsBuiltin(displays[i]) != 0 {
-                return true
-            }
-        }
-        return false
+    /// The only screen the overlay may occupy: the built-in panel.
+    ///
+    /// The fallback to the main screen exists for desktop Macs, which have no
+    /// built-in panel and are meant to run the effect on their main display. On
+    /// a laptop the built-in panel is always the answer, so a lid-driven fold
+    /// can never be drawn over an external monitor — even if the clamshell
+    /// suppression above were to miss.
+    private static func foldScreen() -> NSScreen? {
+        DisplayTopology.builtInScreen() ?? NSScreen.main ?? NSScreen.screens.first
     }
 
     private func beginOverlayActivity() {
