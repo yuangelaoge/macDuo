@@ -30,6 +30,36 @@ public final class OverlayWindowController: NSObject {
     // events plus every show transition (once per fold, never per-tick).
     private var suppressForClamshell = false
 
+    // Throttle for the denied-permission re-probe (see effectPermitted).
+    private var lastPermissionProbe: CFTimeInterval = 0
+    private static let permissionProbeInterval: CFTimeInterval = 1.0
+
+    /// The fold may only light up once screen recording is actually granted.
+    /// In live-capture mode a missing grant used to degrade into the desktop-
+    /// wallpaper fallback (see ScreenCapture.fetchImage), so a lid that was
+    /// already partly shut at first launch produced turn > 0 immediately and
+    /// painted the wallpaper as a full-screen "fold" over the live desktop.
+    /// That is indistinguishable from a hung app: the user's only cue was that
+    /// tilting the lid further changed the picture, and the honest read was to
+    /// force a shutdown. The effect now stays completely off until the grant
+    /// lands. Sources that need no permission (wallpaper, bundled, custom) are
+    /// never gated.
+    private var effectPermitted: Bool {
+        guard AppSettings.shared.imageSourceMode == .liveCapture else { return true }
+        if AppSettings.shared.hasScreenRecordingPermission { return true }
+        // Denied: re-probe at most 1Hz. The published flag is normally
+        // refreshed on activation, but a grant made without the app ever
+        // losing focus must still start the effect on its own.
+        let now = CACurrentMediaTime()
+        guard now - lastPermissionProbe >= Self.permissionProbeInterval else { return false }
+        lastPermissionProbe = now
+        let granted = ScreenCapture.shared.hasPermission()
+        if granted {
+            AppSettings.shared.hasScreenRecordingPermission = true
+        }
+        return granted
+    }
+
     /// Recompute suppression. Called on init, reconfiguration, sleep, wake,
     /// and on every show transition (cheap, runs once per fold — closes the
     /// staleness window where a lid-close lands before any notification).
@@ -158,13 +188,19 @@ public final class OverlayWindowController: NSObject {
         self.window = win
         self.metalView = mtkView
         
-        // One-time initial image load in background during app launch
-        Task(priority: .utility) {
-            if let img = await ScreenCapture.shared.fetchImage() {
-                await MainActor.run {
-                    self.metalView?.updateImage(img)
-                    AppSettings.shared.lastCaptureDate = Date()
-                    AppSettings.shared.isScreenCaptureDormant = true
+        // One-time initial image load in background during app launch.
+        // Skipped without screen-recording permission in live-capture mode:
+        // fetchImage() returns nil there by design (see ScreenCapture), and the
+        // fold is gated until the grant anyway — so this would only burn a
+        // launch-time task to produce nothing.
+        if AppSettings.shared.imageSourceMode != .liveCapture || ScreenCapture.shared.hasPermission() {
+            Task(priority: .utility) {
+                if let img = await ScreenCapture.shared.fetchImage() {
+                    await MainActor.run {
+                        self.metalView?.updateImage(img)
+                        AppSettings.shared.lastCaptureDate = Date()
+                        AppSettings.shared.isScreenCaptureDormant = true
+                    }
                 }
             }
         }
@@ -175,6 +211,20 @@ public final class OverlayWindowController: NSObject {
     /// filter to (once per displayed frame — see MetalFoldView.draw).
     public func update(turn: Double, angle: Double, target: Double) {
         guard let win = self.window, let mv = self.metalView else { return }
+
+        // Permission gate, ahead of every other decision: without screen
+        // recording the fold must not turn on at all. Returning here leaves the
+        // window ordered out and the render loop parked, so the app is inert
+        // until the grant lands — no wallpaper fold, no half-rendered state.
+        if !effectPermitted {
+            if !wasZeroTurn {
+                stopOverlay()
+            }
+            if AppSettings.shared.isScreenCaptureDormant != true {
+                AppSettings.shared.isScreenCaptureDormant = true
+            }
+            return
+        }
 
         // Suppress only for genuine clamshell desktop mode: external attached
         // AND the built-in panel asleep-or-gone. Mirrored presenting (panel

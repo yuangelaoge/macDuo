@@ -38,6 +38,30 @@ public final class AppSettings: ObservableObject {
     private let kAutomaticallyCheckForUpdates = "mactilt_automaticallyCheckForUpdates"
     private let kHideMenuBarIcon = "mactilt_hideMenuBarIcon"
     private let kClamshellOpeningDuration = "mactilt_clamshellOpeningDuration"
+
+    /// Public so LidSensor can read the stored default off the main thread.
+    public static let kProbeLidAngleSensor = "mactilt_probeLidAngleSensor"
+
+    /// Off-main-safe read of the probe switch. LidSensor decides whether to open
+    /// a HID device on its own queue, where reaching through a @Published getter
+    /// would not be sound, so it reads the stored default directly.
+    public static var isLidAngleSensorProbeEnabled: Bool {
+        let defaults = UserDefaults.standard
+        return defaults.object(forKey: kProbeLidAngleSensor) != nil
+            ? defaults.bool(forKey: kProbeLidAngleSensor)
+            : true
+    }
+
+    /// Whether macTilt may look for Apple's lid angle sensor at all. Off means no
+    /// HID device is ever opened: the app runs on the clamshell switch and the
+    /// opening animation, which is a complete experience on Macs that never had
+    /// the sensor, and an escape hatch on Macs that do.
+    @Published public var probeLidAngleSensor: Bool {
+        didSet {
+            UserDefaults.standard.set(probeLidAngleSensor, forKey: Self.kProbeLidAngleSensor)
+            LidSensor.shared.reprobeHardware()
+        }
+    }
     
     // MARK: - Customizable Animation Options
     @Published public var clamshellOpeningDuration: Double {
@@ -151,6 +175,7 @@ public final class AppSettings: ObservableObject {
         
         // Defaults matching User Preferences
         self.hasCompletedOnboarding = defaults.bool(forKey: kHasCompletedOnboarding)
+        self.probeLidAngleSensor = Self.isLidAngleSensorProbeEnabled
         self.startTiltAngle = defaults.object(forKey: kStartTiltAngle) != nil ? defaults.double(forKey: kStartTiltAngle) : 115.0
         self.endTiltAngle = defaults.object(forKey: kEndTiltAngle) != nil ? defaults.double(forKey: kEndTiltAngle) : 3.0
         self.followSpeed = defaults.object(forKey: kFollowSpeed) != nil ? defaults.double(forKey: kFollowSpeed) : 16.0

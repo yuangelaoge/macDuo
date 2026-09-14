@@ -161,7 +161,7 @@ public struct LiquidGlassSettingsView: View {
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                InfoButton("Screen Recording", content: "macTilt requires Screen Recording permission to freeze and fold your active desktop in 3D space as you close the lid. All processing is strictly on-device.")
+                InfoButton("Screen Recording", content: "macTilt requires Screen Recording permission to freeze and fold your active desktop in 3D space as you close the lid. All processing is strictly on-device. Until it is granted, the fold is disabled entirely rather than falling back to a substitute image.")
                 
                 Spacer()
                 
@@ -233,6 +233,16 @@ public struct LiquidGlassSettingsView: View {
                         .frame(width: 300)
                     }
                 }
+            }
+
+            // Honest first-run state: with the grant missing the fold is
+            // deliberately inert (see OverlayWindowController.effectPermitted),
+            // so say so rather than letting the user read the silence as a bug.
+            if !settings.hasScreenRecordingPermission {
+                Text("The fold stays completely off until this is granted — nothing is drawn over your desktop, and the animation never starts half-rendered.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }

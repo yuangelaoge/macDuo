@@ -83,20 +83,27 @@ public struct OnboardingView: View {
                 }
                 
                 if !settings.hasScreenRecordingPermission {
-                    HStack {
-                        Text("After toggling access in System Settings, click Relaunch to apply.")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("macTilt stays completely off until this is granted — nothing is drawn over your desktop, and the fold never starts half-rendered.")
                             .font(.caption)
                             .foregroundColor(.secondary)
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            ScreenCapture.shared.relaunchApp()
-                        }) {
-                            Label("Relaunch", systemImage: "arrow.clockwise")
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        HStack {
+                            Text("After toggling access in System Settings, click Relaunch to apply.")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+
+                            Spacer()
+
+                            Button(action: {
+                                ScreenCapture.shared.relaunchApp()
+                            }) {
+                                Label("Relaunch", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.mini)
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.mini)
                     }
                 }
             }

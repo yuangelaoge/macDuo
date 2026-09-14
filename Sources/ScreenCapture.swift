@@ -116,13 +116,24 @@ public final class ScreenCapture {
         
         switch settings.imageSourceMode {
         case .liveCapture:
+            // Permission gate FIRST, and no wallpaper fallback while it is
+            // missing. This is the load-bearing half of the first-run fix:
+            // the old code fell through to fetchWallpaperImage(), so a lid
+            // that was not fully open at launch (any angle below startTiltAngle
+            // already produces turn > 0) painted the desktop wallpaper as a
+            // full-screen "fold" over the real desktop. It looked like a hung
+            // app, and the user's only cue was that tilting the lid further
+            // changed it. Returning nil instead means "no frame", which the
+            // overlay's cold-texture gate already handles by never showing.
+            guard hasPermission() else { return nil }
             // Hot path: fast synchronous preflight only. The full async probe
             // (enumeration + test capture) runs on didBecomeActive via
             // AppSettings.refreshPermissions — never per fold frame.
-            if hasPermission(), let img = await captureLiveScreen(scaleFactor: scaleFactor) {
+            if let img = await captureLiveScreen(scaleFactor: scaleFactor) {
                 return img
             }
-            // Fallback if permission not granted or capture failed
+            // Capture failed with permission in hand (transient SCK error):
+            // the wallpaper still beats an empty fold here.
             return fetchWallpaperImage() ?? fetchBundledDefaultImage()
             
         case .desktopWallpaper:

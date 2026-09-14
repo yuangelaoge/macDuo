@@ -217,22 +217,90 @@ public final class LidSensor {
         }
     }
 
+    /// Is Apple's lid angle sensor present on this machine? Answered from the
+    /// IORegistry alone — no IOHIDManager, no device opens, no permission of any
+    /// kind. This is what keeps the HID probe off machines that have nothing to
+    /// probe for.
+    ///
+    /// Positive identification only. An inconclusive or failed enumeration
+    /// returns false, which sends the caller down the HID path exactly as
+    /// before: this is a fast path and a permission avoidance, never the thing
+    /// that can wrongly declare a sensor Mac sensorless.
+    static func lidAngleSensorPresentInIORegistry() -> Bool {
+        var iterator: io_iterator_t = 0
+        guard IOServiceGetMatchingServices(
+            kIOMainPortDefault, IOServiceMatching("IOHIDDevice"), &iterator
+        ) == KERN_SUCCESS else { return false }
+        defer { IOObjectRelease(iterator) }
+
+        func property(_ service: io_service_t, _ key: String) -> CFTypeRef? {
+            IORegistryEntryCreateCFProperty(service, key as CFString, kCFAllocatorDefault, 0)?
+                .takeRetainedValue()
+        }
+
+        while case let service = IOIteratorNext(iterator), service != 0 {
+            defer { IOObjectRelease(service) }
+
+            let product = (property(service, kIOHIDProductKey) as? String) ?? ""
+            if product.lowercased() == "las" { return true }
+
+            // Sensors page 0x20, orientation usage 0x8A: what actually separates
+            // the lid sensor from the other sensor-hub devices.
+            let pid = (property(service, kIOHIDProductIDKey) as? NSNumber)?.intValue ?? 0
+            let page = (property(service, kIOHIDPrimaryUsagePageKey) as? NSNumber)?.intValue ?? 0
+            let usage = (property(service, kIOHIDPrimaryUsageKey) as? NSNumber)?.intValue ?? 0
+            if pid == 0x8104, page == 0x0020, usage == 0x008A { return true }
+        }
+        return false
+    }
+
     private func setupManager() {
-        let manager = IOHIDManagerCreate(kCFAllocatorDefault, Self.noOptions)
-        guard IOHIDManagerOpen(manager, Self.noOptions) == kIOReturnSuccess else {
-            activateClamshellMode(reason: "IOHIDManager unavailable")
+        // Ask the IORegistry first. Only a machine that positively has a lid
+        // angle sensor goes on to open an IOHIDManager at all.
+        //
+        // This matters most on the machines that have no sensor — MacBook Neo,
+        // M1 Air, M1 Pro 13", any desktop. They used to pay for the HID probe
+        // anyway: create a manager, enumerate every HID device on the system,
+        // then open the accelerometer, the gyroscope and the ambient light
+        // sensor before concluding "nothing here". That is a lot of
+        // input-hardware access to answer a question the IORegistry answers for
+        // free. Now those machines never touch HID, so there is nothing for
+        // macOS to ask about.
+        guard AppSettings.isLidAngleSensorProbeEnabled else {
+            activateClamshellMode(reason: "lid angle sensor probe disabled in Settings")
             return
         }
-        self.hidManager = manager
-        
-        // Multi-Strategy Hardware Sensor Probing:
-        // STRICTLY match only sensor hardware (UsagePage 0x20, PID 0x8104, "las").
-        // NEVER match keyboards or general input to prevent macOS from asking for "Keystroke Receiving" permission.
+        guard Self.lidAngleSensorPresentInIORegistry() else {
+            activateClamshellMode(reason: "no continuous lid angle sensor on this Mac (MacBook Neo / M1 class)")
+            return
+        }
+
+        let manager = IOHIDManagerCreate(kCFAllocatorDefault, Self.noOptions)
+
+        // MATCH FIRST, OPEN SECOND.
+        //
+        // IOHIDManagerOpen with no criteria set matches EVERY HID device on the
+        // system, keyboard included, before the criteria below can narrow it.
+        // That is a strictly wider association with input hardware than macTilt
+        // has any use for, and a wide-open manager is exactly the shape macOS
+        // treats as "this app wants the keyboard" — the Input Monitoring /
+        // "Keystroke Receiving" consent alert. Narrowing first means the manager
+        // is never associated with an input device at any point.
+        //
+        // macTilt does not need Input Monitoring at all: it reads one feature
+        // report from one sensor and never listens for input events. Denying the
+        // alert was always harmless, which is why the sensor kept working when
+        // it was dismissed — the alert should not have been raised.
         let matchingCriteria: [[String: Any]] = [
+            // Apple's lid angle sensor, by identity.
             [
                 kIOHIDVendorIDKey as String: 0x05AC,
                 kIOHIDProductIDKey as String: 0x8104
             ],
+            // ...and by the sensor usages it declares (page 0x20 = Sensors,
+            // usage 0x8A = Orientation). Primary usage and device usage are
+            // distinct keys and hardware is inconsistent about which one it
+            // populates, so both are listed.
             [
                 kIOHIDPrimaryUsagePageKey as String: 0x0020,
                 kIOHIDPrimaryUsageKey as String: 0x008A
@@ -240,15 +308,27 @@ public final class LidSensor {
             [
                 kIOHIDDeviceUsagePageKey as String: 0x0020,
                 kIOHIDDeviceUsageKey as String: 0x008A
-            ],
-            [
-                kIOHIDProductKey as String: "las"
             ]
         ]
+        // Deliberately NOT a criterion: a bare kIOHIDProductKey == "las" match.
+        // A string-only dictionary is the one shape the HID matching layer
+        // cannot classify as "not an input device", so it undoes the point of
+        // matching narrowly. The product name is still honoured — as a property
+        // filter on devices that the criteria above already matched (see the
+        // isCandidate test below), which is the safe direction to use it in.
         IOHIDManagerSetDeviceMatchingMultiple(manager, matchingCriteria as CFArray)
-        
+
+        guard IOHIDManagerOpen(manager, Self.noOptions) == kIOReturnSuccess else {
+            // A denied Input Monitoring grant also lands here. Nothing is lost:
+            // the fallback below is the same clamshell path used on Macs with
+            // no sensor at all.
+            activateClamshellMode(reason: "HID access unavailable")
+            return
+        }
+        self.hidManager = manager
+
         guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
-            activateClamshellMode(reason: "No sensor HID devices found")
+            activateClamshellMode(reason: "no lid angle sensor found")
             return
         }
         
@@ -266,11 +346,19 @@ public final class LidSensor {
             let prod = (IOHIDDeviceGetProperty(dev, kIOHIDProductKey as CFString) as? String) ?? ""
             let pid = (IOHIDDeviceGetProperty(dev, kIOHIDProductIDKey as CFString) as? Int) ?? 0
             
+            // Only the lid angle sensor itself is a candidate.
+            //
+            // PID 0x8104 is Apple's sensor-hub product ID and is shared by the
+            // accelerometer, the gyroscope and the ambient light sensor, so it
+            // is NOT on its own evidence of the right device. Treating it as
+            // such made the probe open all three on every launch — input
+            // hardware macTilt has no use for and never reads. The Sensors-page
+            // orientation usage is what actually identifies the lid sensor; the
+            // product name covers hardware that reports a vendor-specific page.
             let isCandidate = prod.lowercased() == "las" ||
                               prod.lowercased().contains("lid") ||
                               prod.lowercased().contains("angle") ||
-                              (page == 32 && usage == 138) ||
-                              pid == 0x8104
+                              (page == 32 && usage == 138)
             
             if isCandidate {
                 if IOHIDDeviceOpen(dev, Self.noOptions) == kIOReturnSuccess {
@@ -301,10 +389,13 @@ public final class LidSensor {
             }
         } else {
             // Hardware sensor not present on this machine (e.g. MacBook Neo, M1 Air, M1 Pro 13", iMac)
-            activateClamshellMode(reason: "MacBook Neo / M1 without continuous LAS hardware")
+            activateClamshellMode(reason: "no continuous lid angle sensor on this Mac (MacBook Neo / M1 class)")
         }
     }
     
+    /// `reason` is a lowercase clause completed into the status line. It is the
+    /// only place a denied Input Monitoring grant becomes visible, so it has to
+    /// stay honest instead of blaming the hardware for it.
     private func activateClamshellMode(reason: String) {
         hidStateLock.lock()
         self.hidDevice = nil
@@ -315,7 +406,7 @@ public final class LidSensor {
             AppSettings.shared.isHardwareSensor = false
             AppSettings.shared.isClamshellMode = true
             AppSettings.shared.isSensorConnected = true
-            AppSettings.shared.sensorStatusMessage = "Clamshell Mode Active (MacBook Neo / M1 — Auto Sleep & Wake Animation Enabled)"
+            AppSettings.shared.sensorStatusMessage = "Clamshell Mode Active — \(reason). Lid-open animation enabled."
         }
         lastKnownClamshellClosed = closed
     }
@@ -362,6 +453,23 @@ public final class LidSensor {
         // Closing animation is not possible on no-LAS Macs
     }
     
+    /// Tear the hardware detection down and run it again from scratch. Used when
+    /// the user flips the sensor-probe setting: the running configuration has to
+    /// be rebuilt, and setupManager is the only path that does that. stop() and
+    /// start() both hop onto the same serial HID queue, so the teardown is
+    /// guaranteed to land before the re-probe.
+    public func reprobeHardware() {
+        stop()
+        hidStateLock.lock()
+        hidDevice = nil
+        isDeviceOpen = false
+        hidStateLock.unlock()
+        currentRawAngle = 120.0
+        displayTurn = 0.0
+        targetTurn = 0.0
+        start()
+    }
+
     public func start() {
         guard timer == nil else { return }
         // stop() removes wake observers and closes HID state; rebuild both

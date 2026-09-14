@@ -136,6 +136,58 @@ rm -rf "$DMG_STAGING" "$DMG_OUTPUT"
 mkdir -p "$DMG_STAGING"
 cp -R "$APP_BUNDLE" "$DMG_STAGING/macTilt.app"
 ln -s /Applications "$DMG_STAGING/Applications"
+
+# Gatekeeper blocks an unnotarized download TWICE — once for the DMG and again
+# for the app inside it. Instructions that only live in the README are read by
+# nobody at the moment they are needed, so they travel with the disk image.
+cat > "$DMG_STAGING/How to Install.txt" <<'INSTALL_NOTES_EOF'
+macTilt — first launch
+======================
+
+macTilt is signed but NOT notarized, so macOS Gatekeeper will block it twice.
+Both blocks are expected, and you have to clear BOTH of them.
+
+1. Opening this disk image
+--------------------------
+If macOS says it "cannot be opened because Apple cannot check it for
+malicious software":
+
+  - Right-click (or Control-click) the .dmg and choose Open, then confirm
+    Open again in the dialog.
+  - No Open entry? Go to System Settings > Privacy & Security, scroll to the
+    Security section, and click "Open Anyway" next to the message about
+    macTilt.dmg. Then try opening it again.
+
+2. Launching the app
+--------------------
+Drag macTilt into Applications. If macOS then says "the developer cannot be
+verified":
+
+  - Right-click macTilt.app and choose Open, then confirm Open again.
+  - No Open entry? System Settings > Privacy & Security > "Open Anyway" next
+    to the message about macTilt.app, then launch it again.
+
+You only need to do this once per download. After that macOS remembers and
+the app opens normally.
+
+Prefer the Terminal? Clear the quarantine flag instead:
+
+    xattr -dr com.apple.quarantine /Applications/macTilt.app
+
+That only affects your own machine. It does not make the download any more
+trustworthy to anyone else.
+
+3. Screen Recording permission
+------------------------------
+macTilt needs Screen Recording in order to freeze your desktop into the fold.
+Until you grant it the animation stays COMPLETELY OFF: the app draws nothing
+over your screen, and it never starts a half-rendered or substitute fold.
+Grant it in the onboarding window on first launch, or later from
+Settings > Screen Recording Permission.
+
+macTilt lives in the menu bar — look for the laptop icon up there.
+INSTALL_NOTES_EOF
+
 hdiutil create -volname "macTilt" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_OUTPUT" >/dev/null 2>&1
 rm -rf "$DMG_STAGING"
 if [ "$SIGNING_IDENTITY" != "-" ]; then
