@@ -316,6 +316,39 @@ public struct LiquidGlassSettingsView: View {
                     }
                     Slider(value: $settings.endTiltAngle, in: 0...20, step: 1)
                 }
+
+                Divider()
+
+                // Auto-release Row (issue #9)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Release When Still")
+                            .font(.subheadline)
+
+                        InfoButton("Release When Still", content: "Hold the lid at an angle and stop moving it, and the fold unwinds back to a normal screen. Working angles sit below the start-fold angle, so without this a lid simply left where you use it keeps the desktop folded and blurred until you move or close it. Any movement of the lid takes the fold back.")
+
+                        Spacer()
+
+                        Toggle("", isOn: $settings.autoReleaseFold)
+                            .labelsHidden()
+                    }
+
+                    if settings.autoReleaseFold {
+                        HStack(spacing: 8) {
+                            Text("After")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            Slider(value: $settings.autoReleaseDelay, in: 0.3...3.0, step: 0.1)
+
+                            Text(String(format: "%.1fs", settings.autoReleaseDelay))
+                                .font(.caption)
+                                .monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .frame(width: 34, alignment: .trailing)
+                        }
+                    }
+                }
             }
         }
     }

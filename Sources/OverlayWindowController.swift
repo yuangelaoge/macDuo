@@ -206,10 +206,158 @@ public final class OverlayWindowController: NSObject {
         }
     }
     
+    // MARK: - Auto-release (issue #9)
+
+    // A lid parked at a partial angle is a screen someone is using, not a fold
+    // in progress. See resolveFold for the full reasoning.
+    private var stillSince: CFTimeInterval = 0
+    /// Lowest and highest pre-easing targets seen since the lid last travelled
+    /// further than `motionBand`. Stillness is a *band*, not a per-tick delta:
+    /// the sensor reports whole degrees, so a lid that is physically at rest
+    /// still produces ~1° of quantisation jitter every tick. A per-tick epsilon
+    /// cannot separate that from real motion — set it small and every real
+    /// pause is missed, set it large and the fold releases mid-gesture.
+    private var stillLow: Double = 0
+    private var stillHigh: Double = 0
+    private var isReleasing = false
+    private var releaseStartTime: CFTimeInterval = 0
+    private var releaseFromTurn: Double = 0
+    /// Lid position the release began at, used to detect a lid that is being
+    /// moved again mid-unwind.
+    private var releasedAtTarget: Double = 0
+    /// Released and parked: the fold stays off until the lid is genuinely taken
+    /// further closed than it was at the release.
+    private var isReleased = false
+    /// Lowest fold value seen since the release. An *opening* lid only ever
+    /// lowers this, so it can never climb back above it and trip the fold on.
+    private var releasedFloor: Double = 0
+    /// The next show is a return from a release, so the fold should grow in
+    /// from flat rather than appear already folded.
+    private var reEngaging = false
+
+    /// How far the lid has to travel before it counts as moving at all. This
+    /// single distance does three jobs: it decides whether the lid is being
+    /// held still, it cancels an unwind in progress, and it re-arms a released
+    /// fold. 0.03 of the 0…1 fold range is ~3.4° at the current start/end
+    /// angles — comfortably above the sensor's whole-degree jitter, comfortably
+    /// below anything a hand does on purpose.
+    private static let motionBand: Double = 0.03
+    /// Length of the unwind itself. The render loop's follow filter smooths it
+    /// further, so this is the shape of the gesture, not the whole animation.
+    private static let releaseDuration: CFTimeInterval = 0.45
+
+    /// Resolve the sensor's fold value into the one the overlay should present
+    /// this tick, applying the auto-release.
+    ///
+    /// Why this exists: the fold engages for every angle below the start-fold
+    /// threshold, and the angles people actually work at sit *below* it. So a
+    /// lid simply left at a comfortable angle — the normal state of a laptop in
+    /// use — held a folded, blurred desktop open indefinitely, and the only way
+    /// out was to change the fold settings or close the lid. Stopping should be
+    /// enough: the fold unwinds and the screen comes back.
+    ///
+    /// Stillness is judged on `sensorTarget`, the sensor's pre-easing value. It
+    /// holds steady the instant the lid does, whereas the eased turn keeps
+    /// drifting for a while afterwards and would under-report stillness.
+    private func resolveFold(sensorTurn: Double, sensorTarget: Double) -> (turn: Double, drivenTarget: Double) {
+        let now = CACurrentMediaTime()
+        let settings = AppSettings.shared
+
+        // Mid-unwind. Drive the fold to zero on an ease-out whatever the lid is
+        // doing, and cancel the moment the lid is touched — grabbing a lid that
+        // is unwinding should hand control straight back to the hinge.
+        if isReleasing {
+            if abs(sensorTarget - releasedAtTarget) > Self.motionBand {
+                isReleasing = false
+                stillSince = 0
+                stillLow = sensorTarget
+                stillHigh = sensorTarget
+                return (sensorTurn, sensorTarget)
+            }
+            let t = min(1.0, (now - releaseStartTime) / Self.releaseDuration)
+            let eased = 1.0 - pow(1.0 - t, 3.0)
+            let value = releaseFromTurn * (1.0 - eased)
+            if t >= 1.0 {
+                isReleasing = false
+                isReleased = true
+                // Seed the floor with where the lid actually is. Seeding it
+                // with zero would put the release point *below* the parked lid
+                // and re-engage the fold on the very next tick.
+                releasedFloor = sensorTarget
+                stillSince = 0
+                return (0.0, 0.0)
+            }
+            return (value, value)
+        }
+
+        // Released and parked. Stay unfolded until the lid is genuinely taken
+        // further closed than it was when it released.
+        if isReleased {
+            if !settings.autoReleaseFold {
+                // Switched off while released — hand the lid straight back.
+                isReleased = false
+                return (sensorTurn, sensorTarget)
+            }
+            // Track the floor only on a *significant* crossing. Updating it on
+            // every lower sample would let jitter walk it downwards one tick at
+            // a time, which would eventually put it far enough below the parked
+            // lid for the re-engage test to trip on its own.
+            if sensorTarget < releasedFloor - Self.motionBand {
+                releasedFloor = sensorTarget
+            }
+            guard sensorTarget > releasedFloor + Self.motionBand else {
+                return (0.0, 0.0)
+            }
+            // Being closed again: resume folding, and grow into the live angle
+            // rather than snapping to it.
+            isReleased = false
+            reEngaging = true
+            stillSince = 0
+            stillLow = sensorTarget
+            stillHigh = sensorTarget
+        }
+
+        // Only a real hinge can be "held still", and only a fold that is on
+        // screen can be released. The clamshell animation runs its own
+        // timeline, the interactive preview must not fight the slider the user
+        // is dragging, and a lid that is essentially shut has no screen left to
+        // hand back.
+        guard settings.autoReleaseFold,
+              settings.isHardwareSensor,
+              !settings.isTestModeActive,
+              !LidSensor.shared.isLidPhysicallyClosed else {
+            stillSince = 0
+            stillLow = sensorTarget
+            stillHigh = sensorTarget
+            return (sensorTurn, sensorTarget)
+        }
+
+        // Widen the band the lid is currently living in, and restart the clock
+        // the moment that band outgrows what jitter can explain.
+        if sensorTarget < stillLow { stillLow = sensorTarget }
+        if sensorTarget > stillHigh { stillHigh = sensorTarget }
+        if stillHigh - stillLow > Self.motionBand {
+            stillLow = sensorTarget
+            stillHigh = sensorTarget
+            stillSince = now
+        } else if stillSince == 0 {
+            stillSince = now
+        }
+
+        if sensorTurn > 0.0005, stillSince > 0, now - stillSince >= settings.autoReleaseDelay {
+            isReleasing = true
+            releaseStartTime = now
+            releaseFromTurn = sensorTurn
+            releasedAtTarget = sensorTarget
+        }
+
+        return (sensorTurn, sensorTarget)
+    }
+
     /// turn = eased display turn (drives hysteresis/visibility logic);
     /// target = pre-easing target the view's render loop applies the follow
     /// filter to (once per displayed frame — see MetalFoldView.draw).
-    public func update(turn: Double, angle: Double, target: Double) {
+    public func update(turn sensorTurn: Double, angle: Double, target sensorTarget: Double) {
         guard let win = self.window, let mv = self.metalView else { return }
 
         // Permission gate, ahead of every other decision: without screen
@@ -241,6 +389,11 @@ public final class OverlayWindowController: NSObject {
             AppSettings.shared.isScreenCaptureDormant = true
             return
         }
+
+        // Auto-release resolves the sensor's values into what the overlay should
+        // present this tick. Everything below is unchanged and works off the
+        // resolved pair.
+        let (turn, target) = resolveFold(sensorTurn: sensorTurn, sensorTarget: sensorTarget)
 
         mv.currentTurn = Float(target)
         mv.followSpeed = AppSettings.shared.followSpeed
@@ -283,6 +436,14 @@ public final class OverlayWindowController: NSObject {
                 // just-ordered overlay. Correctness beats the enumeration
                 // latency saved by filter-only refresh.
                 ScreenCapture.shared.invalidateCaches()
+                // Coming back from an auto-release: the desktop was sharp a
+                // moment ago, so grow the fold into the live angle from flat
+                // instead of snapping to a half-folded frame, which reads as a
+                // glitch rather than as the lid having moved.
+                if reEngaging {
+                    mv.seedFold(from: 0)
+                    reEngaging = false
+                }
                 mv.resumeRendering()
                 win.orderFrontRegardless()
                 beginOverlayActivity()
@@ -386,6 +547,7 @@ public final class OverlayWindowController: NSObject {
     private func hideOverlay() {
         wasZeroTurn = true
         openFadeDeadline = 0
+        reEngaging = false
         foldTask?.cancel()
         foldTask = nil
         StreamCapture.shared.noteHidden()

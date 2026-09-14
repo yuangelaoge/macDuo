@@ -38,6 +38,8 @@ public final class AppSettings: ObservableObject {
     private let kAutomaticallyCheckForUpdates = "mactilt_automaticallyCheckForUpdates"
     private let kHideMenuBarIcon = "mactilt_hideMenuBarIcon"
     private let kClamshellOpeningDuration = "mactilt_clamshellOpeningDuration"
+    private let kAutoReleaseFold = "mactilt_autoReleaseFold"
+    private let kAutoReleaseDelay = "mactilt_autoReleaseDelay"
 
     /// Public so LidSensor can read the stored default off the main thread.
     public static let kProbeLidAngleSensor = "mactilt_probeLidAngleSensor"
@@ -77,6 +79,32 @@ public final class AppSettings: ObservableObject {
     
     @Published public var automaticallyCheckForUpdates: Bool {
         didSet { UserDefaults.standard.set(automaticallyCheckForUpdates, forKey: kAutomaticallyCheckForUpdates) }
+    }
+
+    /// Unwind the fold once the lid stops moving (issue #9). A lid parked at a
+    /// partial angle is a screen someone is using, not a fold in progress —
+    /// and the angles people actually work at sit *below* the start-fold
+    /// threshold, so resting is the common case, not an edge case. Without
+    /// this, resting the lid leaves the desktop folded and blurred for as long
+    /// as you stay there.
+    @Published public var autoReleaseFold: Bool {
+        didSet { UserDefaults.standard.set(autoReleaseFold, forKey: kAutoReleaseFold) }
+    }
+
+    /// How long the lid has to stay still before the fold unwinds, in seconds.
+    @Published public var autoReleaseDelay: Double {
+        didSet {
+            let clamped = min(max(autoReleaseDelay, 0.3), 3.0)
+            if clamped != autoReleaseDelay {
+                // Assigning inside didSet does not re-enter it, so persist the
+                // clamped value here rather than leaving the store on the old
+                // one.
+                autoReleaseDelay = clamped
+                UserDefaults.standard.set(clamped, forKey: kAutoReleaseDelay)
+                return
+            }
+            UserDefaults.standard.set(autoReleaseDelay, forKey: kAutoReleaseDelay)
+        }
     }
     
     @Published public var hasCompletedOnboarding: Bool {
@@ -193,6 +221,8 @@ public final class AppSettings: ObservableObject {
         self.enableLockScreenPriority = defaults.object(forKey: kEnableLockScreenPriority) != nil ? defaults.bool(forKey: kEnableLockScreenPriority) : true
         self.automaticallyCheckForUpdates = defaults.object(forKey: kAutomaticallyCheckForUpdates) != nil ? defaults.bool(forKey: kAutomaticallyCheckForUpdates) : true
         self.clamshellOpeningDuration = defaults.object(forKey: kClamshellOpeningDuration) != nil ? defaults.double(forKey: kClamshellOpeningDuration) : 0.95
+        self.autoReleaseFold = defaults.object(forKey: kAutoReleaseFold) != nil ? defaults.bool(forKey: kAutoReleaseFold) : true
+        self.autoReleaseDelay = defaults.object(forKey: kAutoReleaseDelay) != nil ? defaults.double(forKey: kAutoReleaseDelay) : 1.0
         
         // Listen for app becoming active to re-check permissions immediately
         appActiveObserver = NotificationCenter.default.addObserver(

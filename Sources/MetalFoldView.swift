@@ -145,6 +145,21 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
         }
     }
 
+    /// Seed for the next draw's eased fold value. While set, the first frame
+    /// after a resume eases UP from this value instead of snapping to
+    /// `currentTurn`. Used by the auto-release hand-back: the overlay returns
+    /// with the fold at zero and grows into wherever the lid now is, rather
+    /// than appearing already folded over a desktop that was sharp a moment
+    /// ago.
+    private var seededTurn: Float?
+
+    /// Arm the next resume to start unfolding from `turn`. Ignored on a view
+    /// that is already running — the seed only means anything for the first
+    /// frame after a (re)start.
+    func seedFold(from turn: Float) {
+        seededTurn = turn
+    }
+
     /// Full suspend: 0fps floor. isPaused stops drawable acquisition and
     /// orderOut (caller) removes the window from the compositor scene graph —
     /// those are the real wins. Note: releaseDrawables only frees the
@@ -159,6 +174,9 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
         // Invalidate the easing clock: the first draw after resume must SNAP
         // to the current target, never interpolate across the hidden gap.
         lastDrawTime = 0
+        // A seed belongs to the show that armed it; a later, unrelated show
+        // must not inherit it.
+        seededTurn = nil
     }
     
     public init(frame: CGRect) {
@@ -472,7 +490,11 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
         // stall between frames can never produce a teleport.
         let now = CACurrentMediaTime()
         if lastDrawTime <= 0.0 {
-            renderTurn = currentTurn
+            // A seed (auto-release hand-back) wins over the live fold value:
+            // it is the whole point of arming one. Consumed here so it can
+            // never leak into a later frame.
+            renderTurn = seededTurn ?? currentTurn
+            seededTurn = nil
             renderMotionBoost = motionBoost
             lastSampleCount = Self.baseSampleCount(turn: renderTurn)
         } else {
