@@ -60,6 +60,3 @@ DuoLikeAnimation 的 MIT 许可证与原始参考文件保留在
 `ThirdParty/DuoLikeAnimation/`。macTilt 的原始 README 保留在
 `docs/UPSTREAM_README.md`。更详细的整合、适配和权限修复说明见
 [`INTEGRATION.md`](INTEGRATION.md)。
-
-macTilt 上游版本未提供许可证。本仓库保留来源与提交历史；这并不表示取得了
-重新发布、再许可或商用授权。
