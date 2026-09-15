@@ -46,11 +46,16 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
     // MARK: - Check for Updates
     
     public func checkForUpdates(userInitiated: Bool = false) {
+        guard Bundle.main.bundleIdentifier == "com.lqsky7.mactilt" else {
+            statusMessage = "当前为本地 Duo 整合版，上游发行版不包含这些修改。"
+            hasChecked = true
+            return
+        }
         guard !isChecking else { return }
         
         DispatchQueue.main.async {
             self.isChecking = true
-            self.statusMessage = "Checking GitHub for updates..."
+            self.statusMessage = "正在检查 GitHub 更新…"
         }
         
         Task {
@@ -63,9 +68,9 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
                 self.hasChecked = true
                 
                 guard let remoteTag = resolvedTag, !remoteTag.isEmpty else {
-                    self.statusMessage = "Unable to check for updates. Check internet connection."
+                    self.statusMessage = "无法检查更新，请检查网络连接。"
                     if userInitiated {
-                        self.showErrorAlert(message: "Could not retrieve the latest release information from GitHub. Please check your network connection.")
+                        self.showErrorAlert(message: "无法从 GitHub 获取最新版本信息，请检查网络连接。")
                     }
                     return
                 }
@@ -82,14 +87,14 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
                 self.updateAvailable = isNewer
                 
                 if isNewer {
-                    self.statusMessage = "Update available: v\(cleanRemote)"
+                    self.statusMessage = "发现新版本：v\(cleanRemote)"
                     self.postNotificationIfAvailable(version: "v\(cleanRemote)", url: releasePage ?? dmgDownload)
                     
                     if userInitiated {
                         self.showUpdateAvailableAlert(version: "v\(cleanRemote)")
                     }
                 } else {
-                    self.statusMessage = "macTilt v\(self.currentVersion) is up to date."
+                    self.statusMessage = "macTilt v\(self.currentVersion) 已是最新版本。"
                     if userInitiated {
                         self.showUpToDateAlert()
                     }
@@ -185,9 +190,9 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
             guard granted else { return }
             
             let content = UNMutableNotificationContent()
-            content.title = "macTilt Update Available"
-            content.subtitle = "\(version) is ready to install"
-            content.body = "Click to download the latest release from GitHub."
+            content.title = "macTilt 有可用更新"
+            content.subtitle = "\(version) 可以安装"
+            content.body = "点击从 GitHub 下载最新版本。"
             content.sound = .default
             if let url = url {
                 content.userInfo = ["url": url.absoluteString]
@@ -212,20 +217,20 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
     
     private func showUpToDateAlert() {
         let alert = NSAlert()
-        alert.messageText = "You're Up to Date"
-        alert.informativeText = "macTilt v\(currentVersion) (Build \(currentBuild)) is currently the newest version available."
+        alert.messageText = "已是最新版本"
+        alert.informativeText = "macTilt v\(currentVersion)（构建 \(currentBuild)）已是最新版本。"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "好")
         alert.runModal()
     }
     
     private func showUpdateAvailableAlert(version: String) {
         let alert = NSAlert()
-        alert.messageText = "New Update Available: \(version)"
-        alert.informativeText = "A newer version of macTilt is available on GitHub. Would you like to download it now?"
+        alert.messageText = "发现新版本：\(version)"
+        alert.informativeText = "GitHub 上有新版 macTilt，是否现在下载？"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Download Update")
-        alert.addButton(withTitle: "Later")
+        alert.addButton(withTitle: "下载更新")
+        alert.addButton(withTitle: "稍后")
         
         if alert.runModal() == .alertFirstButtonReturn {
             openLatestRelease()
@@ -234,10 +239,10 @@ public final class UpdateChecker: NSObject, ObservableObject, UNUserNotification
     
     private func showErrorAlert(message: String) {
         let alert = NSAlert()
-        alert.messageText = "Check for Updates"
+        alert.messageText = "检查更新"
         alert.informativeText = message
         alert.alertStyle = .warning
-        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "好")
         alert.runModal()
     }
     

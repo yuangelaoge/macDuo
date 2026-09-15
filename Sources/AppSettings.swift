@@ -12,10 +12,10 @@ public enum ImageSourceMode: Int, CaseIterable, Identifiable {
     
     public var title: String {
         switch self {
-        case .liveCapture: return "Live Screen Capture"
-        case .desktopWallpaper: return "Desktop Wallpaper"
-        case .bundledArtwork: return "Bundled Artwork"
-        case .customImage: return "Custom Image"
+        case .liveCapture: return "实时桌面捕获"
+        case .desktopWallpaper: return "桌面壁纸"
+        case .bundledArtwork: return "内置图片"
+        case .customImage: return "自选图片"
         }
     }
 }
@@ -138,6 +138,13 @@ public final class AppSettings: ObservableObject {
     @Published public var reflectionIntensity: Double {
         didSet { UserDefaults.standard.set(reflectionIntensity, forKey: kReflectionIntensity) }
     }
+
+    @Published public var useDuoProjection: Bool = true {
+        didSet { UserDefaults.standard.set(useDuoProjection, forKey: "duo_projection") }
+    }
+    @Published public var eyeDistance: Double = 2.5 {
+        didSet { UserDefaults.standard.set(eyeDistance, forKey: "duo_eyeDistance") }
+    }
     
     /// How much black creeps in from the left and right edges as the panel
     /// folds — the horizontal parallax spread of the projected plane.
@@ -191,7 +198,7 @@ public final class AppSettings: ObservableObject {
     @Published public var isHardwareSensor: Bool = false
     @Published public var isClamshellMode: Bool = false
     @Published public var isClosing: Bool = false
-    @Published public var sensorStatusMessage: String = "Initializing sensor..."
+    @Published public var sensorStatusMessage: String = "正在初始化传感器…"
     @Published public var hasScreenRecordingPermission: Bool = false
     @Published public var lastCaptureDate: Date? = nil
     @Published public var isScreenCaptureDormant: Bool = true
@@ -202,6 +209,8 @@ public final class AppSettings: ObservableObject {
         let defaults = UserDefaults.standard
         
         // Defaults matching User Preferences
+        self.useDuoProjection = defaults.object(forKey: "duo_projection") == nil ? true : defaults.bool(forKey: "duo_projection")
+        self.eyeDistance = defaults.object(forKey: "duo_eyeDistance") == nil ? 2.5 : defaults.double(forKey: "duo_eyeDistance")
         self.hasCompletedOnboarding = defaults.bool(forKey: kHasCompletedOnboarding)
         self.probeLidAngleSensor = Self.isLidAngleSensorProbeEnabled
         self.startTiltAngle = defaults.object(forKey: kStartTiltAngle) != nil ? defaults.double(forKey: kStartTiltAngle) : 115.0
@@ -218,8 +227,8 @@ public final class AppSettings: ObservableObject {
         
         self.showAngleInMenuBar = defaults.object(forKey: kShowAngleInMenuBar) != nil ? defaults.bool(forKey: kShowAngleInMenuBar) : true
         self.hideMenuBarIcon = defaults.object(forKey: kHideMenuBarIcon) != nil ? defaults.bool(forKey: kHideMenuBarIcon) : false
-        self.enableLockScreenPriority = defaults.object(forKey: kEnableLockScreenPriority) != nil ? defaults.bool(forKey: kEnableLockScreenPriority) : true
-        self.automaticallyCheckForUpdates = defaults.object(forKey: kAutomaticallyCheckForUpdates) != nil ? defaults.bool(forKey: kAutomaticallyCheckForUpdates) : true
+        self.enableLockScreenPriority = defaults.object(forKey: kEnableLockScreenPriority) != nil ? defaults.bool(forKey: kEnableLockScreenPriority) : false
+        self.automaticallyCheckForUpdates = defaults.object(forKey: kAutomaticallyCheckForUpdates) != nil ? defaults.bool(forKey: kAutomaticallyCheckForUpdates) : false
         self.clamshellOpeningDuration = defaults.object(forKey: kClamshellOpeningDuration) != nil ? defaults.double(forKey: kClamshellOpeningDuration) : 0.95
         self.autoReleaseFold = defaults.object(forKey: kAutoReleaseFold) != nil ? defaults.bool(forKey: kAutoReleaseFold) : true
         self.autoReleaseDelay = defaults.object(forKey: kAutoReleaseDelay) != nil ? defaults.double(forKey: kAutoReleaseDelay) : 1.0
@@ -243,16 +252,9 @@ public final class AppSettings: ObservableObject {
     }
     
     public func refreshPermissions() {
-        // Fast synchronous check
-        let syncStatus = ScreenCapture.shared.hasPermission()
-        self.hasScreenRecordingPermission = syncStatus
-        
-        // Asynchronous active probe via ScreenCaptureKit
-        Task {
-            let verified = await ScreenCapture.shared.verifyPermissionAsync()
-            await MainActor.run {
-                self.hasScreenRecordingPermission = verified
-            }
+        let granted = ScreenCapture.shared.hasPermission(forceRefresh: true)
+        if hasScreenRecordingPermission != granted {
+            hasScreenRecordingPermission = granted
         }
     }
     

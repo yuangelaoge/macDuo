@@ -267,11 +267,11 @@ public final class LidSensor {
         // free. Now those machines never touch HID, so there is nothing for
         // macOS to ask about.
         guard AppSettings.isLidAngleSensorProbeEnabled else {
-            activateClamshellMode(reason: "lid angle sensor probe disabled in Settings")
+            activateClamshellMode(reason: "已在设置中关闭铰链传感器检测")
             return
         }
         guard Self.lidAngleSensorPresentInIORegistry() else {
-            activateClamshellMode(reason: "no continuous lid angle sensor on this Mac (MacBook Neo / M1 class)")
+            activateClamshellMode(reason: "这台 Mac 未检测到连续角度传感器")
             return
         }
 
@@ -322,13 +322,13 @@ public final class LidSensor {
             // A denied Input Monitoring grant also lands here. Nothing is lost:
             // the fallback below is the same clamshell path used on Macs with
             // no sensor at all.
-            activateClamshellMode(reason: "HID access unavailable")
+            activateClamshellMode(reason: "无法访问 HID 设备")
             return
         }
         self.hidManager = manager
 
         guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else {
-            activateClamshellMode(reason: "no lid angle sensor found")
+            activateClamshellMode(reason: "未找到铰链角度传感器")
             return
         }
         
@@ -385,11 +385,11 @@ public final class LidSensor {
                 AppSettings.shared.isHardwareSensor = true
                 AppSettings.shared.isClamshellMode = false
                 AppSettings.shared.isSensorConnected = true
-                AppSettings.shared.sensorStatusMessage = "Hardware Lid Angle Sensor connected (PID: 0x\(String(format: "%04X", detectedPid)) - \(detectedProd))."
+                AppSettings.shared.sensorStatusMessage = "已连接铰链角度传感器（PID：0x\(String(format: "%04X", detectedPid))，\(detectedProd)）。"
             }
         } else {
             // Hardware sensor not present on this machine (e.g. MacBook Neo, M1 Air, M1 Pro 13", iMac)
-            activateClamshellMode(reason: "no continuous lid angle sensor on this Mac (MacBook Neo / M1 class)")
+            activateClamshellMode(reason: "这台 Mac 未检测到连续角度传感器")
         }
     }
     
@@ -406,7 +406,7 @@ public final class LidSensor {
             AppSettings.shared.isHardwareSensor = false
             AppSettings.shared.isClamshellMode = true
             AppSettings.shared.isSensorConnected = true
-            AppSettings.shared.sensorStatusMessage = "Clamshell Mode Active — \(reason). Lid-open animation enabled."
+            AppSettings.shared.sensorStatusMessage = "已启用预设开盖动画：\(reason)。"
         }
         lastKnownClamshellClosed = closed
     }

@@ -20,7 +20,7 @@ public struct LiquidGlassSettingsView: View {
     @State private var copiedResetCommand: Bool = false
     @State private var showingPermissionTroubleshooting: Bool = false
     @State private var demoToken: Int = 0
-    private let resetCommand = "tccutil reset ScreenCapture com.lqsky7.mactilt"
+    private var resetCommand: String { "tccutil reset ScreenCapture \(Bundle.main.bundleIdentifier ?? "local.david.mactilt-duo")" }
     
     public init() {}
     
@@ -123,15 +123,15 @@ public struct LiquidGlassSettingsView: View {
                     Text("\(Int(settings.currentLidAngle))°")
                         .font(.system(size: 21, weight: .light))
                         .monospacedDigit()
-                    Text("LAS")
+                    Text("铰链角度")
                         .font(.system(size: 9, weight: .medium))
                         .tracking(0.8)
                         .foregroundStyle(.secondary)
                         .opacity(0.6)
                 } else {
-                    Text("Clamshell")
+                    Text("开盖模式")
                         .font(.system(size: 15, weight: .light))
-                    Text("No LAS")
+                    Text("无角度传感器")
                         .font(.system(size: 9, weight: .medium))
                         .tracking(0.8)
                         .foregroundStyle(.secondary)
@@ -151,17 +151,17 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Screen Recording Permission Card
     private var permissionCard: some View {
-        HCISectionCard(title: "Screen Recording Permission", icon: "video.badge.checkmark") {
+        HCISectionCard(title: "屏幕录制权限", icon: "video.badge.checkmark") {
             HStack(spacing: 10) {
                 Image(systemName: settings.hasScreenRecordingPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
                     .foregroundStyle(settings.hasScreenRecordingPermission ? Color.green : Color.orange)
                     .font(.system(size: 15))
                 
-                Text(settings.hasScreenRecordingPermission ? "Permission Active" : "Permission Required")
+                Text(settings.hasScreenRecordingPermission ? "已授权" : "需要授权")
                     .font(.subheadline)
                     .fontWeight(.medium)
                 
-                InfoButton("Screen Recording", content: "macTilt requires Screen Recording permission to freeze and fold your active desktop in 3D space as you close the lid. All processing is strictly on-device. Until it is granted, the fold is disabled entirely rather than falling back to a substitute image.")
+                InfoButton("屏幕录制", content: "实时桌面捕获需要屏幕录制权限，用于在合盖时获取桌面并生成立体效果。所有画面均在本机处理；此模式在授权前不会显示动画。")
                 
                 Spacer()
                 
@@ -172,10 +172,15 @@ public struct LiquidGlassSettingsView: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-                .help("Re-check permission")
+                .help("重新检查权限")
                 
                 if !settings.hasScreenRecordingPermission {
-                    Button("Grant Access") {
+                    Button("重新启动") {
+                        ScreenCapture.shared.relaunchApp()
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    Button("前往授权") {
                         if !ScreenCapture.shared.requestPermission() {
                             ScreenCapture.shared.openSettings()
                         }
@@ -193,24 +198,24 @@ public struct LiquidGlassSettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .help("Permission troubleshooting")
+                    .help("排查权限问题")
                     .popover(isPresented: $showingPermissionTroubleshooting, arrowEdge: .trailing) {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Permission Troubleshooting")
+                            Text("权限问题排查")
                                 .font(.headline)
                             
-                            Text("If already granted in System Settings, macOS requires an app restart to pick up the token.")
+                            Text("如果系统设置已开启权限但这里仍显示未授权，请先重新启动。若更新过应用且问题持续，请从系统设置移除旧的 macTilt Duo 条目，再添加当前应用。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             
                             HStack {
-                                Button("Relaunch App") {
+                                Button("重新启动应用") {
                                     ScreenCapture.shared.relaunchApp()
                                 }
                                 .buttonStyle(.borderedProminent)
                                 .controlSize(.small)
                                 
-                                Button(copiedResetCommand ? "Copied!" : "Copy Reset Command") {
+                                Button(copiedResetCommand ? "已复制" : "复制重置命令") {
                                     NSPasteboard.general.clearContents()
                                     NSPasteboard.general.setString(resetCommand, forType: .string)
                                     copiedResetCommand = true
@@ -239,7 +244,7 @@ public struct LiquidGlassSettingsView: View {
             // deliberately inert (see OverlayWindowController.effectPermitted),
             // so say so rather than letting the user read the silence as a bug.
             if !settings.hasScreenRecordingPermission {
-                Text("The fold stays completely off until this is granted — nothing is drawn over your desktop, and the animation never starts half-rendered.")
+                Text("使用实时桌面捕获时，授权后才会显示合盖效果。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -249,22 +254,22 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Battery & Power Optimization Card
     private var batteryCard: some View {
-        HCISectionCard(title: "Battery & Performance", icon: "battery.100.bolt") {
+        HCISectionCard(title: "耗电与性能", icon: "battery.100.bolt") {
             HStack(spacing: 8) {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 8, height: 8)
                 
-                Text("Zero Idle Battery Impact")
+                Text("闲置时暂停渲染")
                     .font(.subheadline)
                     .fontWeight(.medium)
                     .foregroundStyle(Color.green)
                 
-                InfoButton("Battery Efficiency", content: "macTilt is 100% dormant with 0 Hz background polling during normal use. Capture is pre-armed exclusively in the millisecond you start closing your display (~95°). Metal rendering is paused until the clamshell fold begins.")
+                InfoButton("节能说明", content: "没有合盖动画时，Metal 渲染暂停，铰链传感器以较低频率读取。检测到合盖动作后准备桌面捕获，并按需恢复渲染。")
                 
                 Spacer()
                 
-                Text(settings.isScreenCaptureDormant ? "Dormant" : "Pre-Arming")
+                Text(settings.isScreenCaptureDormant ? "已暂停" : "准备捕获")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 8)
@@ -277,15 +282,15 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Tilt Triggers Card
     private var tiltCard: some View {
-        HCISectionCard(title: "Tilt Trigger Thresholds", icon: "angle") {
+        HCISectionCard(title: "合盖触发角度", icon: "angle") {
             VStack(spacing: 12) {
                 // Start Angle Slider Row
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Start Fold Angle")
+                        Text("动画起始角度")
                             .font(.subheadline)
                         
-                        InfoButton("Start Angle", content: "The MacBook remains in normal usable state above this angle. Folding begins when closed below it.")
+                        InfoButton("起始角度", content: "屏幕角度高于此值时正常显示；合盖到低于此值时开始动画。")
                         
                         Spacer()
                         
@@ -302,10 +307,10 @@ public struct LiquidGlassSettingsView: View {
                 // End Angle Slider Row
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Full Fold Angle")
+                        Text("完全合拢角度")
                             .font(.subheadline)
                         
-                        InfoButton("Full Fold Angle", content: "The animation scales smoothly across the closing movement and darkens completely into black at this angle.")
+                        InfoButton("完全合拢角度", content: "动画随着合盖逐渐变化，到达此角度时画面完全变黑。")
                         
                         Spacer()
                         
@@ -322,10 +327,10 @@ public struct LiquidGlassSettingsView: View {
                 // Auto-release Row (issue #9)
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Release When Still")
+                        Text("停止移动后恢复桌面")
                             .font(.subheadline)
 
-                        InfoButton("Release When Still", content: "Hold the lid at an angle and stop moving it, and the fold unwinds back to a normal screen. Working angles sit below the start-fold angle, so without this a lid simply left where you use it keeps the desktop folded and blurred until you move or close it. Any movement of the lid takes the fold back.")
+                        InfoButton("停止移动后恢复桌面", content: "屏幕停止移动一段时间后，自动结束效果并恢复正常桌面，方便在半开角度继续使用。再次移动屏幕时重新显示合盖效果。")
 
                         Spacer()
 
@@ -335,13 +340,13 @@ public struct LiquidGlassSettingsView: View {
 
                     if settings.autoReleaseFold {
                         HStack(spacing: 8) {
-                            Text("After")
+                            Text("等待")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
 
                             Slider(value: $settings.autoReleaseDelay, in: 0.3...3.0, step: 0.1)
 
-                            Text(String(format: "%.1fs", settings.autoReleaseDelay))
+                            Text(String(format: "%.1f 秒", settings.autoReleaseDelay))
                                 .font(.caption)
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
@@ -355,23 +360,23 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Clamshell Opening Animation Card (Macs without continuous LAS)
     private var clamshellOpeningCard: some View {
-        HCISectionCard(title: "Clamshell Opening Animation", icon: "sparkles") {
+        HCISectionCard(title: "无角度传感器的开盖动画", icon: "sparkles") {
             VStack(alignment: .leading, spacing: 12) {
-                Text("MacBook Pro 13\" (M1) and similar models utilize Apple's binary clamshell switch instead of continuous hinge sensors. macTilt animates a smooth 120Hz unfold whenever you open the lid from sleep.")
+                Text("部分机型（如 13 英寸 M1 MacBook Pro）只能检测开盖或合盖状态，无法连续读取角度。应用会在开盖唤醒时播放预设时长的展开动画。")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 
                 VStack(alignment: .leading, spacing: 6) {
                     HStack {
-                        Text("Opening Duration")
+                        Text("开盖动画时长")
                             .font(.subheadline)
                         
-                        InfoButton("Opening Duration", content: "Average human laptop opening duration ranges from 0.8s to 1.1s. Customize how fast or cinematic your unfold animation feels.")
+                        InfoButton("开盖动画时长", content: "调整开盖动画的播放时长，选择轻快、自然或舒缓的节奏。")
                         
                         Spacer()
                         
-                        Text(String(format: "%.2f s", settings.clamshellOpeningDuration))
+                        Text(String(format: "%.2f 秒", settings.clamshellOpeningDuration))
                             .font(.subheadline)
                             .fontWeight(.semibold)
                             .monospacedDigit()
@@ -381,15 +386,15 @@ public struct LiquidGlassSettingsView: View {
                         .tint(Color.accentColor)
                     
                     HStack {
-                        Text("Snappy (0.6s)")
+                        Text("轻快（0.6 秒）")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text("Natural (0.95s)")
+                        Text("自然（0.95 秒）")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                         Spacer()
-                        Text("Cinematic (2.0s)")
+                        Text("舒缓（2.0 秒）")
                             .font(.caption2)
                             .foregroundStyle(.secondary)
                     }
@@ -402,7 +407,7 @@ public struct LiquidGlassSettingsView: View {
                         settings.clamshellOpeningDuration = 0.60
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("Snappy")
+                        Text("轻快")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -411,7 +416,7 @@ public struct LiquidGlassSettingsView: View {
                         settings.clamshellOpeningDuration = 0.95
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("Natural")
+                        Text("自然")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -420,7 +425,7 @@ public struct LiquidGlassSettingsView: View {
                         settings.clamshellOpeningDuration = 1.60
                         LidSensor.shared.triggerOpeningPreview()
                     }) {
-                        Text("Cinematic")
+                        Text("舒缓")
                             .font(.caption)
                     }
                     .buttonStyle(.bordered)
@@ -432,7 +437,7 @@ public struct LiquidGlassSettingsView: View {
                     }) {
                         HStack(spacing: 4) {
                             Image(systemName: "play.fill")
-                            Text("Preview Unfold")
+                            Text("预览开盖动画")
                         }
                         .font(.caption.bold())
                     }
@@ -444,14 +449,14 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Display Source & Menu Bar Card
     private var displaySourceCard: some View {
-        HCISectionCard(title: "Display & Menu Bar", icon: "display") {
+        HCISectionCard(title: "显示与菜单栏", icon: "display") {
             VStack(spacing: 12) {
                 // Display Source Picker Row
                 HStack {
-                    Text("Screen Source")
+                    Text("画面来源")
                         .font(.subheadline)
                     
-                    InfoButton("Screen Source", content: "Choose between live desktop window freezing, current desktop wallpaper, bundled artwork, or a custom image.")
+                    InfoButton("画面来源", content: "选择实时桌面捕获、当前桌面壁纸、内置图片或自选图片。")
                     
                     Spacer()
                     
@@ -467,13 +472,13 @@ public struct LiquidGlassSettingsView: View {
                 
                 if settings.imageSourceMode == .customImage {
                     HStack {
-                        Text(settings.customImagePath.isEmpty ? "No custom photo selected" : (settings.customImagePath as NSString).lastPathComponent)
+                        Text(settings.customImagePath.isEmpty ? "尚未选择图片" : (settings.customImagePath as NSString).lastPathComponent)
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
                         Spacer()
-                        Button("Choose Image...") {
+                        Button("选择图片…") {
                             selectCustomImage()
                         }
                         .buttonStyle(.bordered)
@@ -486,10 +491,10 @@ public struct LiquidGlassSettingsView: View {
                     
                     // Menu Bar Toggle Row
                     HStack {
-                        Text("Show Lid Angle in Menu Bar")
+                        Text("菜单栏显示铰链角度")
                             .font(.subheadline)
                         
-                        InfoButton("Menu Bar Display", content: "Displays the live numerical degree readout (e.g. 120°) next to the status icon.")
+                        InfoButton("菜单栏角度", content: "在菜单栏图标旁显示实时铰链角度，例如 120°。")
                         
                         Spacer()
                         
@@ -504,14 +509,14 @@ public struct LiquidGlassSettingsView: View {
                 // Hide Status Icon Row
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Hide Menu Bar Icon")
+                        Text("隐藏菜单栏图标")
                             .font(.subheadline)
-                        Text("To bring it back, open macTilt again from Applications.")
+                        Text("重新打开 macTilt 即可返回设置。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     
-                    InfoButton("Hide Menu Bar Icon", content: "Removes macTilt from the menu bar completely. The app keeps running and the fold animation keeps working. Reopen macTilt from Applications to show Settings again.")
+                    InfoButton("隐藏菜单栏图标", content: "隐藏菜单栏图标后，应用与合盖动画仍会运行。重新打开 macTilt 即可进入设置。")
                     
                     Spacer()
                     
@@ -524,18 +529,32 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Animation Physics Card
     private var animationPhysicsCard: some View {
-        HCISectionCard(title: "Physics & Shaders", icon: "slider.horizontal.3") {
+        HCISectionCard(title: "动画效果", icon: "slider.horizontal.3") {
             VStack(spacing: 12) {
+                Picker("效果模式", selection: $settings.useDuoProjection) {
+                    Text("DuoLikeAnimation · 磨砂玻璃").tag(true)
+                    Text("macTilt · 原版").tag(false)
+                }
+                if settings.useDuoProjection {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(String(format: "观看距离：屏幕高度的 %.1f 倍", settings.eyeDistance))
+                            .font(.subheadline)
+                        Slider(value: $settings.eyeDistance, in: 1.1...5.0, step: 0.1)
+                        Text("以屏幕底边为转轴，按你的坐姿调整观看距离。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Divider()
                 // Follow Speed
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Follow Responsiveness")
+                        Text("角度跟随速度")
                             .font(.subheadline)
                         
                         InfoButton(
-                            "Follow Responsiveness",
-                            content: "How fast the fold chases the physical lid — the response time of the motion smoothing. Lower = softer and more fluid; higher = tighter, more immediate tracking.",
-                            demoLabel: "Show me the glide",
+                            "角度跟随速度",
+                            content: "控制动画跟随屏幕角度的速度。数值越低，过渡越柔和；越高，响应越及时。",
+                            demoLabel: "预览跟随效果",
                             demo: { demoFold(0.7, animated: false) }
                         )
                         
@@ -555,35 +574,35 @@ public struct LiquidGlassSettingsView: View {
                 HStack(spacing: 20) {
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Blur Intensity")
+                            Text("虚化强度")
                                 .font(.subheadline)
                             InfoButton(
-                                "Blur Intensity",
-                                content: "Depth of the matte defocus that ramps up as the lid tilts — deeper folds and faster closes get softer. The blur is built from the mip chain, so it stays an even, silky matte at every intensity instead of turning grainy frosted glass.",
-                                demoLabel: "Show me at 55% fold",
+                                "虚化强度",
+                                content: "磨砂玻璃模式按屏幕与原画面的间距计算散射；macTilt 原版使用高斯虚化，并随运动速度增强。磨砂玻璃模式设为 0 时关闭虚化。",
+                                demoLabel: "预览合盖 55%",
                                 demo: { demoFold(0.55) }
                             )
                             Spacer()
-                            Text(String(format: "%.1fx", settings.blurStrength))
+                            Text(String(format: "%.1f 倍", settings.blurStrength))
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .monospacedDigit()
                         }
-                        Slider(value: $settings.blurStrength, in: 0.2...2.0, step: 0.1)
+                        Slider(value: $settings.blurStrength, in: 0.0...2.0, step: 0.1)
                     }
 
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Specular Reflection")
+                            Text("玻璃反光")
                                 .font(.subheadline)
                             InfoButton(
-                                "Specular Reflection",
-                                content: "A soft cool-white highlight band that sweeps up from the hinge as the screen tilts away — like light catching a glass panel at an angle. The frozen image is never bent or lensed; this only adds the shine. 0 = off (default).",
-                                demoLabel: "Show me at 75% fold",
+                                "玻璃反光",
+                                content: "屏幕倾斜时，加入一条柔和的冷白色高光，模拟光照在玻璃上的反射。默认值 0 表示关闭。",
+                                demoLabel: "预览合盖 75%",
                                 demo: { demoFold(0.75) }
                             )
                             Spacer()
-                            Text(String(format: "%.1fx", settings.reflectionIntensity))
+                            Text(String(format: "%.1f 倍", settings.reflectionIntensity))
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .monospacedDigit()
@@ -597,12 +616,12 @@ public struct LiquidGlassSettingsView: View {
                 // Side Blackout — horizontal parallax void
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Side Blackout")
+                        Text("两侧暗边")
                             .font(.subheadline)
                         InfoButton(
-                            "Side Blackout",
-                            content: "How much black creeps in from the left and right edges as the panel folds away from you. This is the horizontal parallax spread of the folded plane: 0% keeps the frozen frame at its full width, 100% is the physical projection, and higher values let the edges fall away harder.",
-                            demoLabel: "Show me at 75% fold",
+                            "两侧暗边",
+                            content: "控制合盖时画面两侧的黑色区域。0% 保持原画面宽度，100% 对应物理投影，数值越大，两侧暗边越明显。",
+                            demoLabel: "预览合盖 75%",
                             demo: { demoFold(0.75) }
                         )
                         Spacer()
@@ -619,18 +638,18 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Lock Screen & Sleep Wake Card (Optional)
     private var lockScreenCard: some View {
-        HCISectionCard(title: "Lock Screen & Sleep Wake", icon: "lock.shield") {
+        HCISectionCard(title: "锁屏与唤醒", icon: "lock.shield") {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("High Priority Display Level")
+                        Text("提高显示层级")
                             .font(.subheadline)
-                        Text("Elevates overlay priority to display during wake transitions.")
+                        Text("尝试在唤醒过渡期间显示动画。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     
-                    InfoButton("Lock Screen Wake", content: "macOS isolates the password Lock Screen for security. To see the animation unfold dynamically on wake, set a 1-minute password grace period in System Settings > Lock Screen, or use Apple Watch Auto-Unlock.")
+                    InfoButton("锁屏唤醒效果", content: "此实验功能沿用上游的私有 SkyLight 接口，本地整合版默认关闭。正常桌面的合盖效果无需开启此项。")
                     
                     Spacer()
                     
@@ -643,13 +662,13 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Test Preview Card
     private var testPreviewCard: some View {
-        HCISectionCard(title: "Interactive Preview", icon: "play.rectangle") {
+        HCISectionCard(title: "交互预览", icon: "play.rectangle") {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text("Preview Animation")
+                    Text("预览动画")
                         .font(.subheadline)
                     
-                    InfoButton("Interactive Preview", content: "Scrub and inspect the fold on your screen without physically moving the lid.")
+                    InfoButton("交互预览", content: "拖动滑块预览合盖效果，无需移动屏幕。松开滑块后自动恢复桌面。")
                     
                     Spacer()
                     
@@ -668,7 +687,7 @@ public struct LiquidGlassSettingsView: View {
                     
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text("Fold Progress")
+                            Text("合盖进度")
                                 .font(.subheadline)
                             Spacer()
                             Text("\(Int(settings.testTurnValue * 100))%")
@@ -702,11 +721,11 @@ public struct LiquidGlassSettingsView: View {
     
     // MARK: - Software Updates Card
     private var softwareUpdateCard: some View {
-        HCISectionCard(title: "Software Updates", icon: "arrow.triangle.2.circlepath.circle") {
+        HCISectionCard(title: "软件更新", icon: "arrow.triangle.2.circlepath.circle") {
             VStack(spacing: 12) {
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Current Version: v\(updater.currentVersion) (Build \(updater.currentBuild))")
+                        Text("当前版本：v\(updater.currentVersion)（构建 \(updater.currentBuild)）")
                             .font(.subheadline)
                             .fontWeight(.medium)
                         
@@ -714,12 +733,12 @@ public struct LiquidGlassSettingsView: View {
                             HStack(spacing: 6) {
                                 ProgressView()
                                     .controlSize(.small)
-                                Text("Checking GitHub for updates...")
+                                Text("正在检查 GitHub 更新…")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                         } else if updater.updateAvailable {
-                            Text("New version available: \(updater.latestVersion)")
+                            Text("发现新版本：\(updater.latestVersion)")
                                 .font(.caption)
                                 .foregroundStyle(Color.green)
                                 .fontWeight(.semibold)
@@ -728,7 +747,7 @@ public struct LiquidGlassSettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         } else {
-                            Text("Check for newer releases published on GitHub.")
+                            Text("本地整合版不自动更新，上游发行版不包含整合修改。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -745,7 +764,7 @@ public struct LiquidGlassSettingsView: View {
                             } else {
                                 Image(systemName: "arrow.clockwise")
                             }
-                            Text("Check for Updates")
+                            Text("检查更新")
                         }
                     }
                     .buttonStyle(.bordered)
@@ -758,17 +777,17 @@ public struct LiquidGlassSettingsView: View {
                     
                     HStack {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(updater.latestVersion) Ready to Install")
+                            Text("\(updater.latestVersion) 可以安装")
                                 .font(.subheadline)
                                 .fontWeight(.semibold)
-                            Text("Download the latest universal DMG installer directly from GitHub Releases.")
+                            Text("从 GitHub Releases 下载最新的通用版 DMG 安装包。")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
                         
                         Spacer()
                         
-                        Button("Download Update (.dmg)") {
+                        Button("下载更新（.dmg）") {
                             updater.openLatestRelease()
                         }
                         .buttonStyle(.borderedProminent)
@@ -780,9 +799,9 @@ public struct LiquidGlassSettingsView: View {
                 
                 Toggle(isOn: $settings.automaticallyCheckForUpdates) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Automatically Check for Updates")
+                        Text("自动检查更新")
                             .font(.subheadline)
-                        Text("Silently checks GitHub releases in the background on startup.")
+                        Text("启动时在后台检查 GitHub 发行版；本地整合版已停用此功能。")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -795,13 +814,16 @@ public struct LiquidGlassSettingsView: View {
     // MARK: - Bottom Footer Bar
     private var footerBar: some View {
         HStack {
-            Button("Reset to Defaults") {
+            Button("恢复默认设置") {
                 settings.startTiltAngle = 115.0
                 settings.endTiltAngle = 3.0
                 settings.followSpeed = 16.0
                 settings.imageSourceMode = .liveCapture
                 settings.blurStrength = 0.5
                 settings.reflectionIntensity = 0.0
+                settings.useDuoProjection = true
+                settings.eyeDistance = 2.5
+                settings.sideVoidAmount = 1.0
                 settings.showAngleInMenuBar = true
                 settings.isTestModeActive = false
                 settings.testTurnValue = 0.0
@@ -809,7 +831,7 @@ public struct LiquidGlassSettingsView: View {
             .buttonStyle(.bordered)
             .controlSize(.regular)
             
-            Button("Welcome Guide") {
+            Button("使用引导") {
                 MenuBarController.shared.openOnboardingWindow()
             }
             .buttonStyle(.bordered)
@@ -817,7 +839,7 @@ public struct LiquidGlassSettingsView: View {
             
             Spacer()
             
-            Button("Done") {
+            Button("完成") {
                 settings.isTestModeActive = false
                 settings.testTurnValue = 0.0
                 OverlayWindowController.shared.stopOverlay()
@@ -862,6 +884,8 @@ public struct LiquidGlassSettingsView: View {
 
     private func selectCustomImage() {
         let panel = NSOpenPanel()
+        panel.title = "选择用于合盖动画的图片"
+        panel.prompt = "选择图片"
         panel.allowedContentTypes = [.image, .png, .jpeg]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -938,6 +962,7 @@ private struct InfoButton: View {
                 .foregroundStyle(.secondary)
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(title.isEmpty ? "说明" : "\(title)说明")
         .popover(isPresented: $isShowing, arrowEdge: .trailing) {
             VStack(alignment: .leading, spacing: 8) {
                 if !title.isEmpty {
@@ -965,4 +990,3 @@ private struct InfoButton: View {
         }
     }
 }
-

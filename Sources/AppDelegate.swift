@@ -10,7 +10,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(
             NSMenuItem(
-                title: "Quit macTilt",
+                title: "退出 macTilt",
                 action: #selector(NSApplication.terminate(_:)),
                 keyEquivalent: "q"
             )
@@ -45,15 +45,15 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         // Setup updates and check in background
-        UpdateChecker.shared.requestNotificationPermission()
         if AppSettings.shared.automaticallyCheckForUpdates {
+            UpdateChecker.shared.requestNotificationPermission()
             DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
                 UpdateChecker.shared.checkForUpdates(userInitiated: false)
             }
         }
     }
     
-    /// Escape hatch for the "Hide Menu Bar Icon" setting: with no status item and
+    /// Escape hatch for the "隐藏菜单栏图标" setting: with no status item and
     /// an .accessory activation policy there is no Dock icon either, so
     /// relaunching macTilt from Finder is the only way back. Reopen Settings in
     /// that case instead of activating to nothing.

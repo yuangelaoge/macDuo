@@ -46,16 +46,17 @@ public final class OverlayWindowController: NSObject {
     /// never gated.
     private var effectPermitted: Bool {
         guard AppSettings.shared.imageSourceMode == .liveCapture else { return true }
-        if AppSettings.shared.hasScreenRecordingPermission { return true }
         // Denied: re-probe at most 1Hz. The published flag is normally
         // refreshed on activation, but a grant made without the app ever
         // losing focus must still start the effect on its own.
         let now = CACurrentMediaTime()
-        guard now - lastPermissionProbe >= Self.permissionProbeInterval else { return false }
+        guard now - lastPermissionProbe >= Self.permissionProbeInterval else {
+            return AppSettings.shared.hasScreenRecordingPermission
+        }
         lastPermissionProbe = now
         let granted = ScreenCapture.shared.hasPermission()
-        if granted {
-            AppSettings.shared.hasScreenRecordingPermission = true
+        if AppSettings.shared.hasScreenRecordingPermission != granted {
+            AppSettings.shared.hasScreenRecordingPermission = granted
         }
         return granted
     }
@@ -411,6 +412,9 @@ public final class OverlayWindowController: NSObject {
         mv.blurStrength = Float(AppSettings.shared.blurStrength)
         mv.reflectionIntensity = Float(AppSettings.shared.reflectionIntensity)
         mv.sideVoid = Float(AppSettings.shared.sideVoidAmount)
+        mv.effectMode = AppSettings.shared.useDuoProjection ? 1 : 0
+        mv.eyeDistance = Float(AppSettings.shared.eyeDistance)
+        mv.foldRadians = Float(max(1, AppSettings.shared.startTiltAngle - AppSettings.shared.endTiltAngle) * .pi / 180)
         // Snapshot velocity on main: draw() must never read LidSensor off-main.
         mv.motionBoost = MetalFoldView.velocityBlurBoost()
 

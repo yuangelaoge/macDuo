@@ -79,7 +79,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         let isHW = AppSettings.shared.isHardwareSensor
         
         // 1. Header
-        let headerTitle = isHW ? "macTilt Lid Tilt Animation" : "macTilt Clamshell Animation"
+        let headerTitle = isHW ? "macTilt 合盖角度动画" : "macTilt 开盖动画"
         let header = NSMenuItem(title: headerTitle, action: nil, keyEquivalent: "")
         header.isEnabled = false
         menu.addItem(header)
@@ -87,7 +87,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         // 2. Update Available (if any)
         if UpdateChecker.shared.updateAvailable {
             let updateItem = NSMenuItem(
-                title: "Download \(UpdateChecker.shared.latestVersion) Update...",
+                title: "下载 \(UpdateChecker.shared.latestVersion) 更新…",
                 action: #selector(openLatestRelease),
                 keyEquivalent: ""
             )
@@ -99,13 +99,13 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         let statusTitle: String
         if lastIsConnected {
             if isHW {
-                let status = AppSettings.shared.isClosing ? "Closing (\(Int(lastAngle))°)" : "Open (\(Int(lastAngle))°)"
-                statusTitle = "Sensor: \(status)"
+                let status = AppSettings.shared.isClosing ? "正在合盖（\(Int(lastAngle))°）" : "已打开（\(Int(lastAngle))°）"
+                statusTitle = "传感器：\(status)"
             } else {
-                statusTitle = "Mode: Clamshell Opening Animation"
+                statusTitle = "模式：预设开盖动画"
             }
         } else {
-            statusTitle = "Lid Sensor: Initializing..."
+            statusTitle = "铰链传感器：正在初始化…"
         }
         let statusItem = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
         statusItem.isEnabled = false
@@ -116,19 +116,19 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
             menu.addItem(NSMenuItem.separator())
             
             let previewItem = NSMenuItem(
-                title: "Preview Opening Animation",
+                title: "预览开盖动画",
                 action: #selector(triggerOpeningPreview),
                 keyEquivalent: "p"
             )
             previewItem.target = self
             menu.addItem(previewItem)
             
-            let durationSubmenu = NSMenu(title: "Opening Speed")
+            let durationSubmenu = NSMenu(title: "开盖速度")
             let speeds: [(title: String, duration: Double)] = [
-                ("Snappy (0.60s)", 0.60),
-                ("Natural (0.95s)", 0.95),
-                ("Smooth (1.40s)", 1.40),
-                ("Cinematic (2.00s)", 2.00)
+                ("轻快（0.60 秒）", 0.60),
+                ("自然（0.95 秒）", 0.95),
+                ("柔和（1.40 秒）", 1.40),
+                ("舒缓（2.00 秒）", 2.00)
             ]
             
             let currentDur = AppSettings.shared.clamshellOpeningDuration
@@ -143,7 +143,7 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
             }
             
             let durationMenuItem = NSMenuItem(
-                title: "Opening Speed (\(String(format: "%.2fs", currentDur)))",
+                title: "开盖速度（\(String(format: "%.2f 秒", currentDur))）",
                 action: nil,
                 keyEquivalent: ""
             )
@@ -153,17 +153,17 @@ public final class MenuBarController: NSObject, NSWindowDelegate, NSMenuDelegate
         
         menu.addItem(NSMenuItem.separator())
         
-        let openSettings = NSMenuItem(title: "Settings...", action: #selector(openSettingsWindow), keyEquivalent: ",")
+        let openSettings = NSMenuItem(title: "设置…", action: #selector(openSettingsWindow), keyEquivalent: ",")
         openSettings.target = self
         menu.addItem(openSettings)
         
-        let checkUpdatesItem = NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: "u")
+        let checkUpdatesItem = NSMenuItem(title: "检查更新…", action: #selector(checkForUpdates), keyEquivalent: "u")
         checkUpdatesItem.target = self
         menu.addItem(checkUpdatesItem)
         
         menu.addItem(NSMenuItem.separator())
         
-        let quitItem = NSMenuItem(title: "Quit macTilt", action: #selector(quitApp), keyEquivalent: "q")
+        let quitItem = NSMenuItem(title: "退出 macTilt", action: #selector(quitApp), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }

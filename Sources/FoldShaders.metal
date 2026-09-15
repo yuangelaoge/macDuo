@@ -14,6 +14,9 @@ struct Uniforms {
     float sampleCount;   // adaptive quality: 12 / 20 / 32 (float for Swift layout parity)
     float motionBoost;   // velocity-aware extra blur radius (0 = still, larger = fast close)
     float sideVoid;      // 0 = frame keeps full width, 1 = physical default, >1 = deeper side blackout
+    float effectMode;
+    float eyeDistance;
+    float foldRadians;
 };
 
 struct VertexOut {
@@ -130,10 +133,66 @@ inline float3 sampleSmoothMatteBlur(texture2d<float> tex,
     return mix(sharp, blurred, smoothstep(0.0, 2.0, radius));
 }
 
+// Adapted from Elijah Semyonov's DuoLikeAnimation, DuoFold.metal (MIT).
+// See ThirdParty/DuoLikeAnimation/LICENSE and INTEGRATION.md.
+// Same fixed UI plane, eye-to-glass ray intersection, gap-based Vogel blur
+// and attenuation. The phone's side hinge becomes the Mac's bottom hinge.
+// Coordinates use a virtual 900-point screen height so blur/grain do not
+// change with Retina resolution or a different preview size.
+inline float3 duoSample(texture2d<float> tex, sampler s, float2 point,
+                        float2 size, float2 cover) {
+    if (any(point < 0.0) || any(point > size)) { return float3(0.0); }
+    return tex.sample(s, (point / size - 0.5) * cover + 0.5, level(0.0)).rgb;
+}
+
+inline float4 duoMacFold(VertexOut in, texture2d<float> tex, sampler s,
+                          constant Uniforms &u) {
+    const float turn = clamp(u.turn, 0.0, 1.0);
+    const float2 size = float2(max(u.aspect, 0.1), 1.0) * 900.0;
+    const float2 p = in.uv * size;
+    const float tilt = turn * clamp(u.foldRadians, 0.01, M_PI_F);
+    if (tilt < 1e-5) { return float4(duoSample(tex, s, p, size, u.cover), 1.0); }
+
+    const float d = size.y - p.y;
+    const float3 glass = float3(p.x, size.y - d * cos(tilt), d * sin(tilt));
+    const float3 eye = float3(size * 0.5, max(u.eyeDistance, 1.05) * size.y);
+    const float depth = eye.z - glass.z;
+    if (depth <= 1e-3) { return float4(0, 0, 0, 1); }
+    const float t = eye.z / depth;
+    float2 hit = eye.xy + (glass.xy - eye.xy) * t;
+    // Existing macTilt art-direction control; 1 preserves upstream projection.
+    hit.x = mix(p.x, hit.x, clamp(u.sideVoid, 0.0, 2.0));
+    const float radius = 0.12 * max(u.blurStrength, 0.0) * glass.z;
+    if (any(hit < -radius) || any(hit > size + radius)) { return float4(0, 0, 0, 1); }
+    const float attenuation = max(1.0 - 0.015 * radius, 0.0);
+    float3 color;
+    if (radius < 0.5) {
+        color = duoSample(tex, s, hit, size, u.cover);
+    } else {
+        const int taps = clamp(int(radius * 2.0), 6, 32);
+        const float rotation = fract(sin(dot(p, float2(12.9898, 78.233))) * 43758.5453) * 6.28318530718;
+        float3 sum = float3(0.0);
+        for (int i = 0; i < taps; ++i) {
+            const float r = radius * sqrt((float(i) + 0.5) / float(taps));
+            const float a = float(i) * 2.39996322973 + rotation;
+            sum += duoSample(tex, s, hit + r * float2(cos(a), sin(a)), size, u.cover);
+        }
+        color = sum / float(taps);
+    }
+    color *= attenuation;
+    // macTilt's optional glass reflection and final close hand-off.
+    const float fromHinge = d / size.y;
+    color += float3(0.82, 0.85, 0.86) * exp(-pow((fromHinge - 0.65) / 0.35, 2.0))
+        * sin(tilt) * (0.025 * u.reflectionIntensity);
+    color *= 1.0 - smoothstep(0.90, 1.0, turn);
+    return float4(color, 1.0);
+}
+
 fragment float4 foldFragment(VertexOut in [[stage_in]],
                              texture2d<float> tex [[texture(0)]],
                              sampler s [[sampler(0)]],
                              constant Uniforms &u [[buffer(0)]]) {
+    if (u.effectMode > 0.5) { return duoMacFold(in, tex, s, u); }
     float turn = clamp(u.turn, 0.0, 1.0);
     float2 uiPixel = 2.0 / max(float2(1.0), u.imageSize);
     int quality = int(clamp(u.sampleCount, 4.0, 32.0));

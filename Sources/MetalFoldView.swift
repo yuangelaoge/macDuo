@@ -14,6 +14,9 @@ public struct Uniforms {
     public var sampleCount: Float
     public var motionBoost: Float
     public var sideVoid: Float
+    public var effectMode: Float = 1
+    public var eyeDistance: Float = 2.5
+    public var foldRadians: Float = 1.954769
     
     public init(imageSize: SIMD2<Float> = .init(1, 1),
                 cover: SIMD2<Float> = .init(1, 1),
@@ -66,6 +69,10 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
     /// width, 1 = the physical projection, up to 2 = exaggerated. Snapshotted
     /// from AppSettings per tick by OverlayWindowController.
     public var sideVoid: Float = 1.0
+    public var effectMode: Float = 1
+    /// Viewer distance measured in screen heights, independent of Retina scale.
+    public var eyeDistance: Float = 2.5
+    public var foldRadians: Float = 1.954769
     /// Velocity boost snapshot, written on main by OverlayWindowController.
     /// draw(in:) is @MainActor in practice (MTKView marshals there), so this
     /// is main-confined rather than cross-thread — the snapshot still earns
@@ -536,6 +543,9 @@ public final class MetalFoldView: MTKView, MTKViewDelegate {
             motionBoost: renderMotionBoost,
             sideVoid: sideVoid
         )
+        uniforms.effectMode = effectMode
+        uniforms.eyeDistance = eyeDistance
+        uniforms.foldRadians = foldRadians
         
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(texture, index: 0)

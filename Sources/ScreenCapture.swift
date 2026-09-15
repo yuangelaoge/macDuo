@@ -16,6 +16,9 @@ public final class ScreenCapture {
     // (including our own overlay on show) are NOT excluded. Short TTL +
     // explicit invalidation on show, not a failed capture.
     private static let filterCacheTTL: TimeInterval = 1.5
+    private let permissionLock = NSLock()
+    private var permissionCheckedAt: TimeInterval = -.infinity
+    private var cachedPermission = false
 
     private init() {}
 
@@ -37,51 +40,32 @@ public final class ScreenCapture {
         return content.displays.first
     }
     
-    /// Fast synchronous preflight
-    public func hasPermission() -> Bool {
-        return CGPreflightScreenCaptureAccess()
+    /// Status-only check. Shared by UI, stream and overlay; never prompts.
+    /// The render/sensor clocks must not generate TCC IPC at 60–120 Hz.
+    public func hasPermission(forceRefresh: Bool = false) -> Bool {
+        permissionLock.lock()
+        defer { permissionLock.unlock() }
+        let now = ProcessInfo.processInfo.systemUptime
+        if forceRefresh || now - permissionCheckedAt >= 2.0 {
+            cachedPermission = CGPreflightScreenCaptureAccess()
+            permissionCheckedAt = now
+        }
+        return cachedPermission
     }
     
     /// Comprehensive async verification using both CoreGraphics and ScreenCaptureKit
     public func verifyPermissionAsync() async -> Bool {
-        if CGPreflightScreenCaptureAccess() {
-            return true
-        }
-        
-        // Probe via ScreenCaptureKit: if we can list external windows, permission is active
-        do {
-            let content: SCShareableContent
-            if #available(macOS 14.4, *) {
-                content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            } else {
-                content = try await SCShareableContent.current
-            }
-            let currentPID = NSRunningApplication.current.processIdentifier
-            let otherWindows = content.windows.filter { $0.owningApplication?.processID != currentPID }
-            if !otherWindows.isEmpty {
-                return true
-            }
-            if !content.displays.isEmpty {
-                // Test capturing a small 1x1 test frame
-                let filter = SCContentFilter(display: content.displays[0], excludingWindows: [])
-                let config = SCStreamConfiguration()
-                config.width = 2
-                config.height = 2
-                if let _ = try? await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) {
-                    return true
-                }
-            }
-        } catch {
-            return false
-        }
-        
-        return false
+        // SCShareableContent and screenshot calls can request access themselves.
+        // Never use them as a background permission probe after a denial.
+        return hasPermission(forceRefresh: true)
     }
     
     /// Request screen recording permission from macOS
     @discardableResult
     public func requestPermission() -> Bool {
-        return CGRequestScreenCaptureAccess()
+        let granted = CGRequestScreenCaptureAccess()
+        _ = hasPermission(forceRefresh: true)
+        return granted
     }
     
     /// Open System Settings directly to Privacy & Security -> Screen Recording
